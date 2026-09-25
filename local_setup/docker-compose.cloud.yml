@@ -1,0 +1,26 @@
+# Overrides for the GCP VM, used by infra/deploy/remote-deploy.sh:
+#   docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --no-build ...
+# Runs the images pushed by GitHub Actions, restarts containers after a reboot,
+# and keeps Redis data (agents) on the persistent disk mounted at /mnt/redis-data.
+services:
+  bolna-app:
+    image: ${REGISTRY}/bolna-app:${IMAGE_TAG}
+    restart: unless-stopped
+
+  plivo-app:
+    image: ${REGISTRY}/plivo-app:${IMAGE_TAG}
+    restart: unless-stopped
+
+  redis:
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - /mnt/redis-data:/data
+
+  proxy:
+    restart: unless-stopped
+
+  # Same config as local, with the authtoken taken from Secret Manager
+  ngrok:
+    volumes:
+      - ./ngrok-config.cloud.yml:/etc/ngrok.yml

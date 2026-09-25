@@ -1,0 +1,105 @@
+name: Deploy to GCP (UAT)
+
+# Builds bolna-app and plivo-app, pushes them to Artifact Registry, then SSHes to
+# the VM over IAP and restarts the stack. Infra comes from infra/terraform/uat.
+on:
+  push:
+    branches: [feature/cloud-setup]
+    paths:
+      - "local_setup/**"
+      - "infra/deploy/**"
+      - ".github/workflows/deploy-gcp.yml"
+  workflow_dispatch:
+
+# One deploy at a time; a new push waits instead of cancelling a running deploy
+concurrency:
+  group: deploy-gcp-uat
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # Workload Identity Federation
+
+# Identifiers from `terraform output` (not secrets)
+env:
+  PROJECT_ID: bolna-voice-uat
+  REGION: asia-south1
+  ZONE: asia-south1-a
+  VM_NAME: bolna-uat
+  REGISTRY: asia-south1-docker.pkg.dev/bolna-voice-uat/bolna
+  WORKLOAD_IDENTITY_PROVIDER: projects/542174357272/locations/global/workloadIdentityPools/bolna-github/providers/github-oidc
+  DEPLOYER_SA: bolna-deployer@bolna-voice-uat.iam.gserviceaccount.com
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Log Docker in to Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push bolna-app
+        uses: docker/build-push-action@v6
+        with:
+          context: local_setup
+          file: local_setup/dockerfiles/bolna_server.Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/bolna-app:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=bolna-app
+          cache-to: type=gha,mode=max,scope=bolna-app
+
+      - name: Build and push plivo-app
+        uses: docker/build-push-action@v6
+        with:
+          context: local_setup
+          file: local_setup/dockerfiles/plivo_server.Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/plivo-app:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=plivo-app
+          cache-to: type=gha,mode=max,scope=plivo-app
+
+  deploy:
+    name: Deploy to VM
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Copy files to the VM
+        run: |
+          tar czf /tmp/bolna-deploy.tgz \
+            --exclude='local_setup/.env' --exclude='*.bak' \
+            local_setup infra/deploy
+          gcloud compute scp /tmp/bolna-deploy.tgz "${VM_NAME}:/tmp/bolna-deploy.tgz" \
+            --zone "$ZONE" --project "$PROJECT_ID" --tunnel-through-iap --quiet
+
+      - name: Restart the stack
+        run: |
+          gcloud compute ssh "$VM_NAME" --zone "$ZONE" --project "$PROJECT_ID" \
+            --tunnel-through-iap --quiet --command "
+              set -e
+              sudo mkdir -p /opt/bolna
+              sudo tar xzf /tmp/bolna-deploy.tgz -C /opt/bolna
+              rm -f /tmp/bolna-deploy.tgz
+              sudo PROJECT_ID=$PROJECT_ID REGISTRY=$REGISTRY IMAGE_TAG=$IMAGE_TAG \
+                bash /opt/bolna/infra/deploy/remote-deploy.sh
+            "
