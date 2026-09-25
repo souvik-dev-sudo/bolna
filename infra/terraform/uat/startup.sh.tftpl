@@ -1,0 +1,26 @@
+#!/bin/bash
+# Runs as root on every boot. Prepares the host only; the app is deployed by GitHub Actions.
+set -euo pipefail
+export PATH="$PATH:/snap/bin"
+
+# Docker + Compose v2 (first boot only)
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+systemctl enable --now docker
+
+# Redis data disk: format once, mount on every boot
+DEV=/dev/disk/by-id/google-redis-data
+MNT=/mnt/redis-data
+if ! blkid "$DEV" >/dev/null 2>&1; then
+  mkfs.ext4 -m 0 -F -E lazy_itable_init=0,lazy_journal_init=0,discard "$DEV"
+fi
+mkdir -p "$MNT"
+grep -q " $MNT " /etc/fstab || echo "$DEV $MNT ext4 discard,defaults,nofail 0 2" >> /etc/fstab
+mountpoint -q "$MNT" || mount "$MNT"
+
+# Let root's Docker pull from Artifact Registry with the VM service account
+gcloud auth configure-docker ${registry_host} --quiet
+
+# App directory used by the deploy workflow
+mkdir -p /opt/bolna

@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and adjust.
+project_id  = "bolna-voice-uat"
+region      = "asia-south1"
+zone        = "asia-south1-a"
+github_repo = "souvik-dev-sudo/bolna"
+
+# Budget alert: needs Billing Account Administrator or Costs Manager on the billing account
+budget_enabled     = false
+billing_account_id = "01284A-80ADC6-A651A6"
+budget_amount_inr  = 8000
