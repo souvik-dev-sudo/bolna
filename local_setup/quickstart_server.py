@@ -1,6 +1,7 @@
 import os
 import asyncio
 import base64
+import hashlib
 import uuid
 import traceback
 import aiohttp
@@ -21,6 +22,18 @@ logger = configure_logger(__name__)
 redis_pool = redis.ConnectionPool.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
+
+# Rendered welcome audio is cached in Redis under this prefix (not an agent key)
+WELCOME_AUDIO_PREFIX = "welcome_audio:"
+WELCOME_AUDIO_TTL_S = 30 * 24 * 3600
+background_tasks = set()
+
+
+def prerender_welcome_audio(agent_config):
+    """Renders the greeting in the background so the first call does not wait for it."""
+    task = asyncio.create_task(get_welcome_audio(agent_config))
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
 
 app = FastAPI()
 
@@ -79,6 +92,7 @@ async def create_agent(agent_data: CreateAgentPayload):
         redis_client.set(agent_uuid, json.dumps(data_for_db)),
         store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
     )
+    prerender_welcome_audio(data_for_db)
 
     return {"agent_id": agent_uuid, "state": "created"}
 
@@ -122,6 +136,7 @@ async def edit_agent(agent_id: str, agent_data: CreateAgentPayload = Body(...)):
             redis_client.set(agent_id, json.dumps(new_data)),
             store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
         )
+        prerender_welcome_audio(new_data)
 
         return {"agent_id": agent_id, "state": "updated"}
 
@@ -150,7 +165,7 @@ async def delete_agent(agent_id: str):
 async def get_all_agents():
     """Fetches all agents stored in Redis."""
     try:
-        agent_keys = await redis_client.keys("*")
+        agent_keys = [k for k in await redis_client.keys("*") if not k.startswith(WELCOME_AUDIO_PREFIX)]
 
         if not agent_keys:
             return {"agents": []}
@@ -171,8 +186,8 @@ async def get_all_agents():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-async def synthesize_welcome_audio(agent_config):
-    """Pre-renders the welcome message as base64 PCM16 mono 8kHz audio via Cartesia, or returns None."""
+def welcome_audio_request(agent_config):
+    """Builds the Cartesia request for the agent's welcome message, or returns None if there is nothing to render."""
     welcome_text = agent_config.get("agent_welcome_message")
     tasks = agent_config.get("tasks") or []
     if not welcome_text or not tasks:
@@ -185,14 +200,45 @@ async def synthesize_welcome_audio(agent_config):
         return None
 
     provider_config = synthesizer.get("provider_config") or {}
-    headers = {"X-API-Key": os.getenv("CARTESIA_API_KEY"), "Cartesia-Version": "2024-06-10"}
-    payload = {
+    return {
         "model_id": provider_config.get("model") or "sonic-3",
         "transcript": welcome_text,
         "voice": {"mode": "id", "id": provider_config.get("voice_id")},
         "language": provider_config.get("language") or "en",
         "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 8000},
     }
+
+
+async def get_welcome_audio(agent_config):
+    """Returns the welcome audio from the Redis cache, rendering and caching it on a miss.
+
+    The cache key covers text, voice, model, language and format, so editing any of
+    them renders a new greeting."""
+    payload = welcome_audio_request(agent_config)
+    if payload is None:
+        return None
+
+    cache_key = WELCOME_AUDIO_PREFIX + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    try:
+        cached = await redis_client.get(cache_key)
+        if cached:
+            logger.info(f"Welcome audio: served from cache ({len(cached) * 3 // 4} bytes)")
+            return cached
+    except Exception as e:
+        logger.error(f"Welcome audio: cache read failed: {e}")
+
+    audio = await synthesize_welcome_audio(payload)
+    if audio:
+        try:
+            await redis_client.set(cache_key, audio, ex=WELCOME_AUDIO_TTL_S)
+        except Exception as e:
+            logger.error(f"Welcome audio: cache write failed: {e}")
+    return audio
+
+
+async def synthesize_welcome_audio(payload):
+    """Renders the welcome message as base64 PCM16 mono 8kHz audio via Cartesia, or returns None."""
+    headers = {"X-API-Key": os.getenv("CARTESIA_API_KEY"), "Cartesia-Version": "2024-06-10"}
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -226,7 +272,7 @@ async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: st
         traceback.print_exc()
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    welcome_audio = await synthesize_welcome_audio(agent_config)
+    welcome_audio = await get_welcome_audio(agent_config)
     assistant_manager = AssistantManager(agent_config, websocket, agent_id, welcome_message_audio=welcome_audio)
 
     try:
