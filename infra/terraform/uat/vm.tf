@@ -1,5 +1,5 @@
 # One VM running the same five containers as the laptop (redis, bolna-app,
-# plivo-app, proxy, ngrok). Static external IP (address.tf); SSH over IAP with OS Login.
+# plivo-app, proxy, ngrok). No public IP; SSH over IAP with OS Login.
 resource "google_compute_instance" "bolna" {
   name         = "${var.name_prefix}-uat"
   machine_type = var.machine_type
@@ -23,11 +23,6 @@ resource "google_compute_instance" "bolna" {
 
   network_interface {
     subnetwork = google_compute_subnetwork.subnet.id
-
-    access_config {
-      nat_ip       = google_compute_address.vm.address
-      network_tier = "PREMIUM"
-    }
   }
 
   service_account {
