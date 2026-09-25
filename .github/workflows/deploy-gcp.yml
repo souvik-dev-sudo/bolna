@@ -4,7 +4,7 @@ name: Deploy to GCP (UAT)
 # the VM over IAP and restarts the stack. Infra comes from infra/terraform/uat.
 on:
   push:
-    branches: [feature/cloud-setup]
+    branches: [feature/cloud-setup-v2]
     paths:
       - "bolna/**"
       - "local_setup/**"
