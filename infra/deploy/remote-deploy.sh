@@ -25,6 +25,7 @@ REDIS_URL=redis://redis:6379
 PLIVO_AUTH_ID=$(secret plivo-auth-id)
 PLIVO_AUTH_TOKEN=$(secret plivo-auth-token)
 PLIVO_PHONE_NUMBER=$(secret plivo-phone-number)
+TEST_CALL_PIN=$(secret test-call-pin 2>/dev/null || true)
 EOF
 sed "s|^authtoken:.*|authtoken: \"$(secret ngrok-authtoken)\"|" ngrok-config.yml > ngrok-config.cloud.yml
 umask 022

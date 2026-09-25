@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bolna test call</title>
+  <style>
+    :root { --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #6b7280; --line: #d9dde3;
+            --accent: #2563eb; --ok: #15803d; --err: #b91c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #111418; --card: #1b2027; --text: #e7eaee; --muted: #9aa3ad; --line: #333b45;
+              --accent: #5b8def; --ok: #4ade80; --err: #f87171; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+           background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+    main { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line);
+           border-radius: 12px; padding: 24px; }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    p.sub { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+    label { display: block; margin: 14px 0 6px; font-size: 14px; font-weight: 600; }
+    input, select { width: 100%; padding: 10px 12px; font: inherit; color: inherit; background: transparent;
+                    border: 1px solid var(--line); border-radius: 8px; }
+    small { color: var(--muted); font-size: 13px; }
+    button { width: 100%; margin-top: 20px; padding: 12px; font: inherit; font-weight: 600; color: #fff;
+             background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    #msg { min-height: 24px; margin: 14px 0 0; font-size: 14px; }
+    .ok { color: var(--ok); } .err { color: var(--err); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Bolna test call</h1>
+  <p class="sub">Enter the PIN and your number. Your phone rings in a few seconds.</p>
+
+  <label for="pin">PIN</label>
+  <input id="pin" type="password" autocomplete="off" inputmode="numeric">
+
+  <label for="agent">Agent</label>
+  <select id="agent" disabled><option>Enter the PIN first</option></select>
+
+  <label for="phone">Phone number</label>
+  <input id="phone" type="tel" placeholder="919876543210" autocomplete="tel">
+  <small>Country code + number, no + or spaces</small>
+
+  <button id="call" disabled>Call me</button>
+  <p id="msg" role="status"></p>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const msg = (text, cls) => { $("msg").textContent = text; $("msg").className = cls || ""; };
+
+  async function post(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+    return data;
+  }
+
+  async function loadAgents() {
+    const pin = $("pin").value.trim();
+    if (!pin) return;
+    msg("Checking PIN…");
+    try {
+      const agents = await post("/test-call/agents", { pin });
+      $("agent").replaceChildren(...(agents.length
+        ? agents.map((a) => new Option(a.name, a.agent_id))
+        : [new Option("No agents created yet", "")]));
+      $("agent").disabled = !agents.length;
+      $("call").disabled = !agents.length;
+      msg(agents.length ? "" : "Create an agent on the server first.", agents.length ? "" : "err");
+    } catch (e) {
+      $("agent").disabled = $("call").disabled = true;
+      msg(e.message, "err");
+    }
+  }
+
+  $("pin").addEventListener("change", loadAgents);
+  $("pin").addEventListener("keydown", (e) => { if (e.key === "Enter") loadAgents(); });
+
+  $("call").addEventListener("click", async () => {
+    $("call").disabled = true;
+    msg("Placing the call…");
+    try {
+      const r = await post("/test-call", { pin: $("pin").value.trim(), agent_id: $("agent").value, phone: $("phone").value });
+      msg(`Calling ${r.phone}. Answer to hear the agent.`, "ok");
+    } catch (e) {
+      msg(e.message, "err");
+    } finally {
+      setTimeout(() => { $("call").disabled = false; }, 5000);
+    }
+  });
+</script>
+</body>
+</html>

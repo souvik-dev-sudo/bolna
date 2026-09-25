@@ -11,6 +11,7 @@ locals {
     PLIVO_AUTH_TOKEN   = "${var.name_prefix}-plivo-auth-token"
     PLIVO_PHONE_NUMBER = "${var.name_prefix}-plivo-phone-number"
     NGROK_AUTHTOKEN    = "${var.name_prefix}-ngrok-authtoken"
+    TEST_CALL_PIN      = "${var.name_prefix}-test-call-pin" # optional; enables /test-call
   }
 }
 

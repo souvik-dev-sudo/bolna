@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
 # Copy application files
-COPY telephony_server/plivo_api_server.py /app/
+COPY telephony_server/plivo_api_server.py telephony_server/test_call.html /app/
 
 EXPOSE 8002
 
