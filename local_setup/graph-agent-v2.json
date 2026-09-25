@@ -1,0 +1,266 @@
+{
+    "agent_config": {
+        "agent_name": "No-Show v2",
+        "agent_type": "graph_agent",
+        "agent_welcome_message": "Good morning. I am Kavya from Dr. Agarwal's Eye Hospital. Preferred language - English, Hindi or Tamil?",
+        "tasks": [
+            {
+                "task_type": "conversation",
+                "toolchain": {
+                    "execution": "parallel",
+                    "pipelines": [
+                        [
+                            "transcriber",
+                            "llm",
+                            "synthesizer"
+                        ]
+                    ]
+                },
+                "task_config": {
+                    "voicemail": false,
+                    "use_fillers": false,
+                    "dtmf_enabled": false,
+                    "ambient_noise": false,
+                    "backchanneling": false,
+                    "call_terminate": 300,
+                    "optimize_latency": true,
+                    "incremental_delay": 200,
+                    "check_if_user_online": true,
+                    "hangup_after_LLMCall": false,
+                    "hangup_after_silence": 15,
+                    "call_cancellation_prompt": null,
+                    "voicemail_check_interval": 7,
+                    "check_user_online_message": {
+                        "en": "Hello, are you still on the line?",
+                        "hi": "Hello, क्या आप अभी भी लाइन पर हैं?"
+                    },
+                    "backchanneling_message_gap": 5,
+                    "backchanneling_start_delay": 5,
+                    "interruption_backoff_period": 0,
+                    "interruptible_hangup_message": false,
+                    "voicemail_detection_duration": 30,
+                    "voicemail_min_transcript_length": 7,
+                    "number_of_words_for_interruption": 3,
+                    "trigger_user_online_message_after": 10
+                },
+                "tools_config": {
+                    "input": {
+                        "format": "wav",
+                        "provider": "plivo"
+                    },
+                    "output": {
+                        "format": "wav",
+                        "provider": "plivo"
+                    },
+                    "api_tools": {
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "transfer_call_919330724843",
+                                    "description": "Use this tool to transfer the call",
+                                    "parameters": {
+                                        "type": "object",
+                                        "required": [
+                                            "call_sid"
+                                        ],
+                                        "properties": {
+                                            "call_sid": {
+                                                "type": "string",
+                                                "description": "unique call id"
+                                            }
+                                        }
+                                    },
+                                    "strict": false
+                                }
+                            }
+                        ],
+                        "tools_params": {
+                            "transfer_call_919330724843": {
+                                "url": null,
+                                "method": "POST",
+                                "param": {
+                                    "call_sid": "%(call_sid)s",
+                                    "call_transfer_number": "+919330724843"
+                                },
+                                "headers": {},
+                                "api_token": null,
+                                "pre_call_message": "Sure, I'll transfer the call for you. Please wait a moment"
+                            }
+                        }
+                    },
+                    "llm_agent": {
+                        "agent_type": "graph_agent",
+                        "agent_flow_type": "streaming",
+                        "llm_config": {
+                            "provider": "google",
+                            "family": "google",
+                            "model": "gemini-2.5-flash",
+                            "max_tokens": 250,
+                            "temperature": 1,
+                            "top_p": 0.9,
+                            "min_p": 0.1,
+                            "top_k": 0,
+                            "presence_penalty": 0,
+                            "frequency_penalty": 0,
+                            "request_json": false,
+                            "use_responses_api": false,
+                            "routing_model": "gemini-2.5-flash",
+                            "routing_provider": "google",
+                            "routing_max_tokens": 200,
+                            "current_node_id": "Start",
+                            "context_data": {
+                                "recipient_data": {
+                                    "name": "Rahul",
+                                    "tag": "Sir",
+                                    "missed_date": "the twenty second of September",
+                                    "missed_time": "ten thirty AM",
+                                    "branch": "Anna Nagar",
+                                    "timezone": "Asia/Kolkata"
+                                }
+                            },
+                            "agent_information": "You are Kavya, patient services at Dr. Agarwal's Eye Hospital, Chennai.\nThis is an OUTBOUND call — you rang them, they were not expecting you.\nOne or two sentences a turn, never more.\n\nLANGUAGE\nReply in the language they are speaking. If they named one, use that. If they\ndid not, the language of their words is the answer. Only when you truly cannot\ntell — silence, noise, garbled text — use Tamil. Never ask again, and follow\nthem without comment if they switch mid-call.\nEach step gives the same line in English, Hindi and Tamil. Pick the one that\nmatches them. Never pick Tamil by default.\n\nNUMBERS — ENGLISH WORDS, NEVER NUMERALS\n\"ten thirty AM\", \"the tenth\", \"Monday\", \"nine, seven, eight\".\nNever write a numeral. The voice reads numerals in Tamil.\n\nSAY THE LINE YOU ARE GIVEN\nEach step gives you a line. Say it as written. Never improve it, never\nreorder the steps, never add a step, never skip one.\n\nYOU ARE NOT A DOCTOR\nNever name or confirm a condition, interpret a symptom or a report, or quote\na price. Never invent a doctor, branch, slot or policy. Those, and anything\nabout bills, refunds, insurance or records, go to a person.\n\nNEVER ASK THE SAME THING TWICE\nUnclear once, ask again more simply. Unclear twice, move on.",
+                            "routing_instructions": "Outbound no-show follow-up. The call starts at Notify.\n\nMEDICAL OVERRIDE, from any node. If they describe a problem they have right\nnow, or ask you anything medical, route to Transfer at once — it beats every\nother route. Urgent especially: sudden loss of vision, severe eye pain, an\ninjury, something in the eye, sudden flashes or floaters, a shadow across the\nvision, or trouble after a recent operation.\nExplaining why they missed the appointment is not this. A past illness is a\nreason, not a request.\n",
+                            "nodes": [
+                                {
+                                    "id": "Start",
+                                    "node_type": "router",
+                                    "edges": [
+                                        {
+                                            "to_node_id": "Notify",
+                                            "condition": "",
+                                            "condition_type": "unconditional"
+                                        }
+                                    ]
+                                },
+                                {
+                                    "id": "Notify",
+                                    "node_type": "llm",
+                                    "prompt": "LANGUAGE — decide from their reply, in this order:\n1. They NAMED a language — use that one, in whatever script it reached you.\n   The recogniser sometimes writes English or Hindi words in Tamil letters.\n2. They did not name one, but spoke in English, Hindi or Tamil — reply in the\n   language they spoke. What language their words are in IS the answer,\n   whatever those words happen to be. Most people just start talking rather\n   than choosing.\n3. Only if you truly cannot tell — silence, noise, a garbled transcript —\n   use Tamil.\nNever ask the language again.\n\nSAY THIS, then stop and wait:\nen  \"{name} {tag}, as per our records you weren't able to come in for your appointment on {missed_date} at our {branch} branch. May I know the reason?\"\nta  \"{name} {tag}, எங்க records-ல {missed_date} {branch} branch appointment-க்கு நீங்க வரலைன்னு இருக்கு. காரணம் சொல்ல முடியுமா?\"\nhi  \"{name} {tag}, हमारे records में है कि {missed_date} को {branch} branch के appointment पर आप नहीं आ पाए। कारण बता सकते हैं?\"\n\nIF THEY ASK ABOUT THE CALL ITSELF — who you are, where you are calling from,\nhow you got their number, whether you are a person or an AI — answer in a few\nwords and say your line in the SAME turn.\nYou are Kavya, from Dr. Agarwal's Eye Hospital. Their number is on their\npatient record with us. You ARE an AI assistant: say so plainly if asked, and\nnever deny it or dodge the question.\nNever answer and stop.\n\n\nNEVER INVENT A LINE. No acknowledgement, no thank-you, no apology, no offer,\nno closing of your own. If you have nothing new to say, say your line again.\n",
+                                    "examples": {
+                                        "en": "Hi Rahul Sir, you missed your appointment on 22 September at Anna nagar branch",
+                                        "ta": "{name} {tag}, {missed_date} {missed_time}-க்கு {branch} branch-ல உங்க appointment miss ஆயிடுச்சு."
+                                    },
+                                    "edges": [
+                                        {
+                                            "to_node_id": "Languages_Offered",
+                                            "condition": "They ask what languages you speak, without naming one",
+                                            "label": "Languages Offered?"
+                                        },
+                                        {
+                                            "to_node_id": "Transfer",
+                                            "condition": "They ask for, or say they want, a language that is NOT English, Hindi or Tamil — Telugu, Kannada, Malayalam, Bengali, Marathi, anything else. Answering the greeting with English, Hindi or Tamil is NOT this edge",
+                                            "label": "Other Languages",
+                                            "function_name": "transfer_other_language"
+                                        },
+                                        {
+                                            "to_node_id": "Reason",
+                                            "condition": "They gave a reason for not attending, after being asked why.",
+                                            "label": "Reason"
+                                        },
+                                        {
+                                            "to_node_id": "Immediate_Close",
+                                            "condition": "The person on the line says this is the wrong number, or the caller says he did not book any appointment, or is unknown to them",
+                                            "label": "Wrong Number",
+                                            "function_name": "close_wrong_number"
+                                        },
+                                        {
+                                            "to_node_id": "Transfer",
+                                            "condition": "The callers demands for a human or a real person or a real agent",
+                                            "label": "Human Agent",
+                                            "function_name": "transfer_human_agent"
+                                        },
+                                        {
+                                            "to_node_id": "Transfer",
+                                            "condition": "They are telling you about a medical problem they have , or asking you a\nmedical question — what something is, whether it is serious, what to do\nabout it, what a report says, what medicine or drops to use.",
+                                            "label": "Medical Problem",
+                                            "function_name": "transfer_medical_problem"
+                                        },
+                                        {
+                                            "to_node_id": "Immediate_Close",
+                                            "condition": "The caller mentions they never booked an appointment.",
+                                            "label": "Never Booked",
+                                            "function_name": "close_never_booked"
+                                        }
+                                    ]
+                                },
+                                {
+                                    "id": "Languages_Offered",
+                                    "node_type": "static",
+                                    "prompt": "",
+                                    "static_message": {
+                                        "en": "English, Hindi, or Tamil?",
+                                        "hi": "English, Hindi, या Tamil — कौन सी भाषा?",
+                                        "ta": "English, Hindi, இல்ல Tamil — எந்த language வசதி?"
+                                    },
+                                    "edges": [
+                                        {
+                                            "to_node_id": "Notify",
+                                            "condition": "",
+                                            "condition_type": "unconditional"
+                                        }
+                                    ]
+                                },
+                                {
+                                    "id": "Transfer",
+                                    "node_type": "llm",
+                                    "prompt": "Call the transfer tool.",
+                                    "function_call": "transfer_call_919330724843",
+                                    "edges": []
+                                },
+                                {
+                                    "id": "Reason",
+                                    "node_type": "static",
+                                    "prompt": "",
+                                    "static_message": {
+                                        "en": "Hello baby",
+                                        "hi": "Hello baby",
+                                        "ta": "Hello baby"
+                                    },
+                                    "edges": []
+                                },
+                                {
+                                    "id": "Immediate_Close",
+                                    "node_type": "static",
+                                    "prompt": "",
+                                    "static_message": {
+                                        "en": "Sorry to trouble you. Thank you.",
+                                        "hi": "तकलीफ़ के लिए माफ़ कीजिए। धन्यवाद।",
+                                        "ta": "தொந்தரவுக்கு மன்னிச்சுக்கங்க. நன்றி."
+                                    },
+                                    "edges": []
+                                }
+                            ]
+                        }
+                    },
+                    "transcriber": {
+                        "provider": "gemini",
+                        "model": "gemini-3.5-transcribe-live",
+                        "language": "auto",
+                        "encoding": "linear16",
+                        "stream": true,
+                        "endpointing": 300
+                    },
+                    "synthesizer": {
+                        "provider": "cartesia",
+                        "stream": true,
+                        "buffer_size": 100,
+                        "audio_format": "wav",
+                        "provider_config": {
+                            "voice": "Nithya - Polished Presence",
+                            "voice_id": "80e4e2b3-ec54-4930-97ac-667eba950352",
+                            "model": "sonic-3",
+                            "language": "ta",
+                            "speed": 1
+                        }
+                    }
+                }
+            }
+        ]
+    },
+    "agent_prompts": {
+        "task_1": {
+            "system_prompt": ""
+        }
+    }
+}

@@ -10,6 +10,7 @@ resource "google_project_iam_member" "vm_roles" {
   for_each = toset([
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
+    "roles/aiplatform.user", # Gemini LLM and Live transcription on Vertex AI
   ])
 
   project = var.project_id

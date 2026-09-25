@@ -6,6 +6,7 @@ on:
   push:
     branches: [feature/cloud-setup]
     paths:
+      - "bolna/**"
       - "local_setup/**"
       - "infra/deploy/**"
       - ".github/workflows/deploy-gcp.yml"
@@ -53,7 +54,7 @@ jobs:
       - name: Build and push bolna-app
         uses: docker/build-push-action@v6
         with:
-          context: local_setup
+          context: .
           file: local_setup/dockerfiles/bolna_server.Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/bolna-app:${{ env.IMAGE_TAG }}

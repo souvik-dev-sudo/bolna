@@ -45,8 +45,16 @@ class GeminiLLM(BaseLLM):
             self.model = self.model[len("models/") :]
 
         self.temperature = temperature
-        api_key = kwargs.get("llm_key", os.getenv("GOOGLE_API_KEY"))
-        self.client = genai.Client(api_key=api_key)
+        # Vertex AI authenticates with ADC (the VM's service account) instead of an AI Studio key.
+        if os.getenv("GEMINI_USE_VERTEX", "").lower() == "true":
+            project = os.getenv("GOOGLE_CLOUD_PROJECT")
+            location = os.getenv("GEMINI_LLM_LOCATION", "global")
+            self.client = genai.Client(vertexai=True, project=project, location=location)
+            logger.info(f"[GeminiLLM] Using Vertex AI (project={project}, location={location})")
+        else:
+            api_key = kwargs.get("llm_key", os.getenv("GOOGLE_API_KEY"))
+            self.client = genai.Client(api_key=api_key)
+            logger.info("[GeminiLLM] Using the Gemini API with an API key")
 
         self.api_params = kwargs.get("api_tools", {}).get("tools_params", {})
         bolna_tools = kwargs.get("api_tools", {}).get("tools", [])

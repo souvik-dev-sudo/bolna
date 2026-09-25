@@ -11,6 +11,7 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from .base_transcriber import BaseTranscriber
 from bolna.enums import TelephonyProvider
+from bolna.helpers.gcp_auth import get_gcp_credentials
 from bolna.helpers.logger_config import configure_logger
 from bolna.helpers.utils import create_ws_data_packet, resample, timestamp_ms, ulaw_to_pcm
 
@@ -21,6 +22,8 @@ GEMINI_LIVE_URL = (
     "wss://generativelanguage.googleapis.com/ws/"
     "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 )
+# Vertex AI serves the same Live protocol behind a bearer token, on a global or regional host.
+VERTEX_LIVE_PATH = "/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent"
 # The Live API only accepts 16 kHz mono PCM-16, regardless of the call's telephony rate.
 GEMINI_INPUT_SAMPLE_RATE = 16000
 # Values of `language` that mean "let the model detect", which maps to an empty languageCodes.
@@ -66,6 +69,10 @@ class GeminiTranscriber(BaseTranscriber):
 
         # GOOGLE_API_KEY is the same key GeminiLLM reads; accept either name.
         self.api_key = kwargs.get("transcriber_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        # Vertex mode authenticates with ADC (the VM's service account), so no API key is needed.
+        self.use_vertex = os.getenv("GEMINI_USE_VERTEX", "").lower() == "true"
+        self.vertex_project = os.getenv("GOOGLE_CLOUD_PROJECT")
+        self.vertex_location = os.getenv("GEMINI_STT_LOCATION", "global")
 
         # SMART strips disfluencies and self-corrections; VERBATIM keeps every word. Left unset the
         # server default (VERBATIM) applies, which is what a downstream LLM should reason over.
@@ -127,6 +134,29 @@ class GeminiTranscriber(BaseTranscriber):
             return []
         return [self.language]
 
+    def _vertex_live_url(self):
+        host = (
+            "aiplatform.googleapis.com"
+            if self.vertex_location == "global"
+            else f"{self.vertex_location}-aiplatform.googleapis.com"
+        )
+        return f"wss://{host}{VERTEX_LIVE_PATH}"
+
+    def _model_path(self):
+        model = self.model.split("/")[-1]
+        if self.use_vertex:
+            return f"projects/{self.vertex_project}/locations/{self.vertex_location}/publishers/google/models/{model}"
+        return self.model if self.model.startswith("models/") else f"models/{self.model}"
+
+    async def _connection_params(self):
+        """(url, headers) for the socket: a bearer token on Vertex, the API key in the query otherwise."""
+        if self.use_vertex:
+            token, _ = await get_gcp_credentials()
+            return self._vertex_live_url(), {"Authorization": f"Bearer {token}"}
+        if not self.api_key:
+            raise ConnectionError("No Gemini API key: set GEMINI_API_KEY or pass transcriber_key")
+        return f"{GEMINI_LIVE_URL}?key={self.api_key}", None
+
     def _build_setup(self):
         """The one client frame Gemini needs before audio. Keep it to keys the API is known to
         accept: an unrecognized key makes Gemini reject the whole setup and the call never connects.
@@ -136,7 +166,7 @@ class GeminiTranscriber(BaseTranscriber):
             transcription_config["mode"] = self.transcription_mode
 
         setup = {
-            "model": self.model if self.model.startswith("models/") else f"models/{self.model}",
+            "model": self._model_path(),
             "generationConfig": {"responseModalities": ["TEXT"]},
             "inputAudioTranscription": transcription_config,
         }
@@ -158,11 +188,11 @@ class GeminiTranscriber(BaseTranscriber):
 
     async def gemini_connect(self):
         """Open the socket, send setup, and block on setupComplete before any audio is allowed."""
-        if not self.api_key:
-            raise ConnectionError("No Gemini API key: set GEMINI_API_KEY or pass transcriber_key")
-        url = f"{GEMINI_LIVE_URL}?key={self.api_key}"
+        url, headers = await self._connection_params()
         try:
-            gemini_ws = await asyncio.wait_for(websockets.connect(url, max_size=None), timeout=10.0)
+            gemini_ws = await asyncio.wait_for(
+                websockets.connect(url, max_size=None, additional_headers=headers), timeout=10.0
+            )
             await gemini_ws.send(json.dumps({"setup": self._build_setup()}))
             raw = await asyncio.wait_for(gemini_ws.recv(), timeout=10.0)
             message = json.loads(raw)
@@ -171,7 +201,10 @@ class GeminiTranscriber(BaseTranscriber):
                 raise ConnectionError(f"Gemini setup failed: {error.get('message', json.dumps(message)[:200])}")
             self.websocket_connection = gemini_ws
             self.connection_authenticated = True
-            logger.info(f"Connected to Gemini Live (model={self.model}, source={self.encoding}@{self.sampling_rate})")
+            logger.info(
+                f"Connected to Gemini Live (model={self.model}, vertex={self.use_vertex}, "
+                f"source={self.encoding}@{self.sampling_rate})"
+            )
             return gemini_ws
         except asyncio.TimeoutError:
             raise ConnectionError("Timeout while connecting to Gemini Live websocket")

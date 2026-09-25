@@ -12,6 +12,7 @@ locals {
     "billingbudgets.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "aiplatform.googleapis.com",
   ]
 }
 
