@@ -28,6 +28,10 @@ PLIVO_PHONE_NUMBER=$(secret plivo-phone-number)
 EOF
 sed "s|^authtoken:.*|authtoken: \"$(secret ngrok-authtoken)\"|" ngrok-config.yml > ngrok-config.cloud.yml
 umask 022
+# The ngrok and redis containers run as non-root users (uid 1000 and 999)
+chown 1000 ngrok-config.cloud.yml
+mkdir -p /mnt/redis-data/redis
+chown 999:999 /mnt/redis-data/redis
 
 # Paths docker-compose.yml mounts into bolna-app
 mkdir -p /opt/bolna/agent_data "$HOME/.aws"
@@ -41,6 +45,8 @@ $COMPOSE pull bolna-app plivo-app
 echo "==> Starting ${SERVICES}"
 # shellcheck disable=SC2086
 $COMPOSE up -d --no-build $SERVICES
+# ngrok reads its config only at start, so always give it a fresh container
+$COMPOSE up -d --no-build --force-recreate ngrok
 # nginx keeps the old container IPs after a recreate
 $COMPOSE restart proxy
 
@@ -53,8 +59,20 @@ for port in 5001 8002; do
 done
 
 $COMPOSE ps
-echo "==> ngrok URL:"
-curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | head -1
+
+echo "==> Waiting for the ngrok tunnel"
+URL=""
+for _ in $(seq 1 30); do
+  URL=$(curl -s http://localhost:4040/api/tunnels | grep -o 'https://[^"]*' | head -1 || true)
+  [ -n "$URL" ] && break
+  sleep 2
+done
+if [ -z "$URL" ]; then
+  echo "ngrok tunnel did not come up:"
+  $COMPOSE logs --tail 20 ngrok
+  exit 1
+fi
+echo "ngrok URL: $URL"
 
 # Drop old images so the boot disk does not fill up
 docker image prune -af --filter "until=168h" >/dev/null || true

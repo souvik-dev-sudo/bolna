@@ -15,7 +15,7 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     restart: unless-stopped
     volumes:
-      - /mnt/redis-data:/data
+      - /mnt/redis-data/redis:/data
 
   proxy:
     restart: unless-stopped
