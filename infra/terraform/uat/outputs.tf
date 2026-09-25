@@ -10,6 +10,10 @@ output "vm_internal_ip" {
   value = google_compute_instance.bolna.network_interface[0].network_ip
 }
 
+output "vm_external_ip" {
+  value = google_compute_address.vm.address
+}
+
 output "ssh_command" {
   value = "gcloud compute ssh ${google_compute_instance.bolna.name} --zone=${var.zone} --project=${var.project_id} --tunnel-through-iap"
 }
