@@ -105,7 +105,7 @@
                             "frequency_penalty": 0,
                             "request_json": false,
                             "use_responses_api": false,
-                            "routing_model": "gpt-4.1-mini",
+                            "routing_model": "gpt-4.1-nano",
                             "routing_provider": "openai",
                             "routing_max_tokens": 200,
                             "current_node_id": "Notify",
@@ -222,7 +222,8 @@
                         "model": "gemini-3.5-transcribe-live",
                         "language": "auto",
                         "encoding": "linear16",
-                        "stream": true
+                        "stream": true,
+                        "endpointing": 300
                     },
                     "synthesizer": {
                         "provider": "cartesia",
@@ -232,7 +233,7 @@
                         "provider_config": {
                             "voice": "Nithya - Polished Presence",
                             "voice_id": "80e4e2b3-ec54-4930-97ac-667eba950352",
-                            "model": "sonic-3",
+                            "model": "sonic-turbo",
                             "language": "ta",
                             "speed": 1
                         }
