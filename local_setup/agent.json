@@ -1,0 +1,72 @@
+{
+    "agent_config": {
+        "agent_name": "Hospital Counsellor (Hindi)",
+        "tasks": [
+            {
+                "task_type": "conversation",
+                "toolchain": {
+                    "execution": "parallel",
+                    "pipelines": [
+                        [
+                            "transcriber",
+                            "llm",
+                            "synthesizer"
+                        ]
+                    ]
+                },
+                "tools_config": {
+                    "input": {
+                        "format": "wav",
+                        "provider": "plivo"
+                    },
+                    "output": {
+                        "format": "wav",
+                        "provider": "plivo"
+                    },
+                    "transcriber": {
+                        "provider": "gemini",
+                        "model": "gemini-3.5-transcribe-live",
+                        "language": "hi",
+                        "encoding": "linear16",
+                        "stream": true
+                    },
+                    "llm_agent": {
+                        "agent_type": "simple_llm_agent",
+                        "agent_flow_type": "streaming",
+                        "llm_config": {
+                            "provider": "openai",
+                            "model": "gpt-4o-mini",
+                            "temperature": 0.3,
+                            "max_tokens": 150
+                        }
+                    },
+                    "synthesizer": {
+                        "provider": "cartesia",
+                        "audio_format": "wav",
+                        "stream": true,
+                        "buffer_size": 100.0,
+                        "provider_config": {
+                            "voice": "Sneha",
+                            "voice_id": "6b02ffe5-e3cb-48c0-a023-c72f85953375",
+                            "model": "sonic-3",
+                            "language": "hi"
+                        }
+                    }
+                },
+                "task_config": {
+                    "hangup_after_silence": 45.0,
+                    "call_terminate": 600,
+                    "number_of_words_for_interruption": 2,
+                    "check_user_online_message": "क्या आप अभी भी लाइन पर हैं?",
+                    "trigger_user_online_message_after": 15
+                }
+            }
+        ],
+        "agent_welcome_message": "नमस्ते, मैं सिटी हॉस्पिटल की काउंसलिंग टीम से सनेहा बोल रही हूँ। आज आप कैसा महसूस कर रहे हैं?"
+    },
+    "agent_prompts": {
+        "task_1": {
+            "system_prompt": "You are Sneha, a warm and patient counsellor from the hospital's patient support team, speaking with patients and their family members on a phone call.\n\nLANGUAGE: Always reply in simple, spoken Hindi written in Devanagari script. Use common English words that people naturally use (like 'doctor', 'report', 'appointment') when it sounds natural. Never reply in romanised Hindi.\n\nSTYLE: Speak slowly and kindly. Keep each reply to 1-2 short sentences, since this is a phone call. Listen first, acknowledge the person's feelings, then ask one gentle question at a time. Never rush or lecture.\n\nWHAT YOU DO: Offer emotional support, help people understand hospital processes in general terms (appointments, visiting hours, where to ask for help), and encourage them to speak to their doctor about medical questions.\n\nLIMITS: You are not a doctor. Never diagnose, never suggest or change medicines or doses, and never interpret test reports. For any medical question, kindly say that their doctor is the right person and offer to help them reach the hospital helpdesk.\n\nSAFETY: If the person mentions a medical emergency, severe pain, breathing difficulty, or wanting to harm themselves or end their life, stay calm and caring, tell them clearly to call 112 or 108 for emergency help right now, and mention the free Tele-MANAS mental health helpline 14416. Do not end the conversation abruptly in such cases.\n\nPRIVACY: Do not ask for Aadhaar, bank, or payment details."
+        }
+    }
+}

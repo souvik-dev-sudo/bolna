@@ -1,13 +1,10 @@
 region: us
-version: '2'
-authtoken: <your-auth-token>
+version: "2"
+authtoken: "35yv3rV1BiY5gNfvK3NDaaQWI7m_N4L7R4VTGb5YF3wBQGVr"
 tunnels:
-  twilio-app:
-    addr: twilio-app:8001
-    proto: http
   plivo-app:
-    addr: plivo-app:8002
+    addr: proxy:80
     proto: http
   bolna-app:
-    addr: bolna-app:5001
+    addr: proxy:80
     proto: http

@@ -1,9 +1,7 @@
 import os
 import asyncio
-import base64
 import uuid
 import traceback
-import aiohttp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as redis
@@ -171,44 +169,6 @@ async def get_all_agents():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-async def synthesize_welcome_audio(agent_config):
-    """Pre-renders the welcome message as base64 PCM16 mono 8kHz audio via Cartesia, or returns None."""
-    welcome_text = agent_config.get("agent_welcome_message")
-    tasks = agent_config.get("tasks") or []
-    if not welcome_text or not tasks:
-        logger.warning("Welcome audio: no welcome message or tasks in agent config, skipping")
-        return None
-
-    synthesizer = tasks[0].get("tools_config", {}).get("synthesizer") or {}
-    if synthesizer.get("provider") != "cartesia":
-        logger.warning(f"Welcome audio: synthesizer provider {synthesizer.get('provider')!r} is not 'cartesia', skipping")
-        return None
-
-    provider_config = synthesizer.get("provider_config") or {}
-    headers = {"X-API-Key": os.getenv("CARTESIA_API_KEY"), "Cartesia-Version": "2024-06-10"}
-    payload = {
-        "model_id": provider_config.get("model") or "sonic-3",
-        "transcript": welcome_text,
-        "voice": {"mode": "id", "id": provider_config.get("voice_id")},
-        "language": provider_config.get("language") or "en",
-        "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 8000},
-    }
-    try:
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post("https://api.cartesia.ai/tts/bytes", headers=headers, json=payload) as response:
-                if response.status != 200:
-                    body = await response.text()
-                    logger.error(f"Welcome audio: Cartesia returned {response.status}: {body}")
-                    return None
-                audio = await response.read()
-        logger.info(f"Welcome audio: synthesized {len(audio)} bytes")
-        return base64.b64encode(audio).decode("utf-8")
-    except Exception as e:
-        logger.error(f"Welcome audio: synthesis failed: {e}", exc_info=True)
-        return None
-
-
 #############################################################################################
 # Websocket
 #############################################################################################
@@ -226,8 +186,7 @@ async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: st
         traceback.print_exc()
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    welcome_audio = await synthesize_welcome_audio(agent_config)
-    assistant_manager = AssistantManager(agent_config, websocket, agent_id, welcome_message_audio=welcome_audio)
+    assistant_manager = AssistantManager(agent_config, websocket, agent_id)
 
     try:
         async for index, task_output in assistant_manager.run(local=True):
