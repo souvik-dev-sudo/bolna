@@ -107,7 +107,7 @@
                             "use_responses_api": false,
                             "routing_model": "gpt-4.1-mini",
                             "routing_provider": "openai",
-                            "routing_max_tokens": 200,
+                            "routing_max_tokens": 50,
                             "current_node_id": "Notify",
                             "context_data": {
                                 "recipient_data": {
@@ -219,7 +219,7 @@
                     },
                     "transcriber": {
                         "provider": "gemini",
-                        "model": "gemini-3.5-transcribe-live",
+                        "model": "gemini-3.5-transcribe-live-preview",
                         "language": "auto",
                         "encoding": "linear16",
                         "stream": true

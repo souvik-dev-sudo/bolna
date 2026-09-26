@@ -49,6 +49,8 @@ _ROUTER_REASONING_PREFIX = f"{_DETERMINISTIC_REASONING_PREFIX}router:"
 _PROMPT_VAR_PATTERN = re.compile(r"\{\{?\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\.[a-zA-Z0-9_]+|\[[^\[\]{}]+\])*\s*\}\}?")
 _ROUTER_REASONING_DESC = "Brief explanation of why this routing decision was made"
 _ROUTER_CONFIDENCE_DESC = "Confidence score from 0.0 to 1.0 for this routing decision"
+# Ends a speculative generation's queue; anything else on it is a chunk or an exception to re-raise.
+_SPEC_DONE = object()
 
 # Time variables frozen per call for the conversation prompt; see _prompt_context.
 _TIME_VAR_KEYS = (
@@ -1491,6 +1493,28 @@ class GraphAgent(BaseAgent):
             text = update_prompt_with_context(text, self.context_data)
         return {"static_message": text, "static_audio_hash": get_md5_hash(text)}
 
+    async def _speculate_current_node(self, message: List[dict], queue: asyncio.Queue, meta_info: dict, synthesize):
+        """Stream the current node's reply into `queue` while routing runs, so a turn that stays on
+        the node has its reply under way before the routing call returns. Routing only moves
+        current_node_id after it is awaited, so this builds the prompt for the node the turn began on."""
+        try:
+            current_node = self.get_node_by_id(self.current_node_id)
+            messages = await self._build_messages(message, meta_info=meta_info)
+            await queue.put({"messages": messages})
+            tool_choice = self._get_tool_choice_for_node(history=message)
+            forced_name = tool_choice["function"]["name"] if tool_choice else None
+            node_tools = self._tools_for_node(current_node, forced_name)
+            node_llm = self._conversation_llm_for(current_node)
+            async for chunk in node_llm.generate_stream(
+                messages, synthesize=synthesize, meta_info=meta_info, tool_choice=tool_choice, tools=node_tools
+            ):
+                await queue.put(chunk)
+            await queue.put(_SPEC_DONE)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            await queue.put(e)
+
     async def generate(self, message: List[dict], **kwargs) -> AsyncGenerator:
         meta_info = kwargs.get("meta_info", {})
         synthesize = kwargs.get("synthesize", True)
@@ -1506,6 +1530,8 @@ class GraphAgent(BaseAgent):
             await guard_llm_base_url(self.base_url)
             self._base_url_validated = True
 
+        routing_task = None
+        speculative_task = None
         try:
             # Event-triggered generation: process_event() already handled routing
             is_event = self._event_triggered_generation
@@ -1593,6 +1619,14 @@ class GraphAgent(BaseAgent):
             else:
                 previous_node = self.current_node_id
                 routing_started_at = time.time()
+                # Speculative parallel routing: an LLM node starts its reply while routing runs. A turn
+                # that stays uses it as is; a transition discards it and the new node generates below.
+                routing_task = asyncio.create_task(self.decide_next_node_with_functions(message))
+                if self._node_type_of(active_node) == NodeType.LLM:
+                    speculative_queue = asyncio.Queue()
+                    speculative_task = asyncio.create_task(
+                        self._speculate_current_node(message, speculative_queue, meta_info, synthesize)
+                    )
                 (
                     next_node_id,
                     extracted_params,
@@ -1602,9 +1636,12 @@ class GraphAgent(BaseAgent):
                     reasoning,
                     confidence,
                     routing_usage,
-                ) = await self.decide_next_node_with_functions(message)
+                ) = await routing_task
 
                 if next_node_id:
+                    if speculative_task is not None:
+                        speculative_task.cancel()
+                        logger.info(f"Speculative generation discarded on node {previous_node}")
                     logger.info(f"Transitioning: {self.current_node_id} -> {next_node_id} (params: {extracted_params})")
                     self._advance_to_node(next_node_id, entry_index=len(message))
                     if extracted_params:
@@ -1648,6 +1685,16 @@ class GraphAgent(BaseAgent):
                     for hop in await self._resolve_router_chain(message):
                         yield {"routing_info": hop}
 
+                if speculative_task is not None and not next_node_id:
+                    logger.info(f"Speculative generation used on node {self.current_node_id}")
+                    while True:
+                        item = await speculative_queue.get()
+                        if item is _SPEC_DONE:
+                            return
+                        if isinstance(item, Exception):
+                            raise item
+                        yield item
+
             # A router that could not resolve (invalid config that bypassed validation)
             # ends the turn cleanly rather than speaking from an empty node prompt.
             current_node = self.get_node_by_id(self.current_node_id)
@@ -1679,3 +1726,8 @@ class GraphAgent(BaseAgent):
             # and gets spoken. Propagate so the task manager ends the call with an LLMError.
             logger.error(f"Error in generate: {e}")
             raise
+        finally:
+            # A closed or failed turn must not leave the routing call or a speculative stream running.
+            for task in (routing_task, speculative_task):
+                if task is not None and not task.done():
+                    task.cancel()

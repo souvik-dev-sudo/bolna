@@ -472,6 +472,14 @@ class TaskManager(BaseManager):
         # payloads too), 24000 for web calls so the first turn matches the full-band TTS.
         self.welcome_message_audio_sample_rate = int(self.kwargs.pop("welcome_message_audio_sample_rate", None) or 8000)
 
+        # Pre-rendered static node audio: text -> base64 PCM16 mono 8kHz. Converted once to the 8k
+        # mu-law the telephony static-node path sends, so a hit skips live TTS.
+        self.static_message_audio = {
+            text: audioop.lin2ulaw(base64.b64decode(audio), 2)
+            for text, audio in (self.kwargs.pop("static_message_audio", None) or {}).items()
+            if audio
+        }
+
         self.welcome_message_delay = task.get("task_config", {}).get("welcome_message_delay", 0)
         # Pre-decode welcome audio for faster playback
         self.preloaded_welcome_audio = (
@@ -7447,20 +7455,25 @@ class TaskManager(BaseManager):
                         audio_chunk = wav_bytes_to_pcm(resample(audio, format="wav", target_sample_rate=8000))
                         meta_info["format"] = "pcm"
                 elif static_node_audio:
-                    logger.info(f"Getting static node audio {text} from S3")
                     yield_in_chunks = False
-                    try:
-                        audio = await get_raw_audio_bytes(
-                            text, self.assistant_name, "mp3", assistant_id=self.assistant_id, local=self.is_local
-                        )
-                        if audio is not None:
-                            # Telephony wire format is 8k mu-law. Providers key off meta_info["format"]:
-                            # plivo/vobiz send non-wav bytes as audio/x-mulaw without converting, so raw
-                            # linear16 would play as noise. mu-law is correct across plivo/twilio/exotel.
-                            audio_chunk = audioop.lin2ulaw(mp3_bytes_to_pcm(audio, target_sample_rate=8000), 2)
-                            meta_info["format"] = "mulaw"
-                    except Exception as static_audio_err:
-                        logger.error(f"Failed to prepare static node audio {text}: {static_audio_err}")
+                    audio_chunk = self.static_message_audio.get(meta_info.get("text"))
+                    if audio_chunk is not None:
+                        logger.info("Sending pre-rendered static node audio")
+                        meta_info["format"] = "mulaw"
+                    else:
+                        logger.info(f"Getting static node audio {text} from S3")
+                        try:
+                            audio = await get_raw_audio_bytes(
+                                text, self.assistant_name, "mp3", assistant_id=self.assistant_id, local=self.is_local
+                            )
+                            if audio is not None:
+                                # Telephony wire format is 8k mu-law. Providers key off meta_info["format"]:
+                                # plivo/vobiz send non-wav bytes as audio/x-mulaw without converting, so raw
+                                # linear16 would play as noise. mu-law is correct across plivo/twilio/exotel.
+                                audio_chunk = audioop.lin2ulaw(mp3_bytes_to_pcm(audio, target_sample_rate=8000), 2)
+                                meta_info["format"] = "mulaw"
+                        except Exception as static_audio_err:
+                            logger.error(f"Failed to prepare static node audio {text}: {static_audio_err}")
                     if audio_chunk is None:
                         # Cache miss or fetch/convert failure: synthesize live so the node still speaks.
                         logger.info("Static node audio unavailable; synthesizing live from text")

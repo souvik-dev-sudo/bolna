@@ -1,6 +1,7 @@
 import os
 import asyncio
 import base64
+import hashlib
 import uuid
 import traceback
 import aiohttp
@@ -21,6 +22,30 @@ logger = configure_logger(__name__)
 redis_pool = redis.ConnectionPool.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 redis_client = redis.Redis.from_pool(redis_pool)
 active_websockets: List[WebSocket] = []
+
+# Rendered welcome and static node audio are cached in Redis under these prefixes (not agent keys)
+WELCOME_AUDIO_PREFIX = "welcome_audio:"
+STATIC_AUDIO_PREFIX = "static_audio:"
+AUDIO_CACHE_PREFIXES = (WELCOME_AUDIO_PREFIX, STATIC_AUDIO_PREFIX)
+WELCOME_AUDIO_TTL_S = 30 * 24 * 3600
+background_tasks = set()
+
+
+def run_in_background(coro):
+    task = asyncio.create_task(coro)
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+
+
+def prerender_welcome_audio(agent_config):
+    """Renders the greeting in the background so the first call does not wait for it."""
+    run_in_background(get_welcome_audio(agent_config))
+
+
+def prerender_static_audio(agent_config):
+    """Renders every static node message in the background so calls play them without live TTS."""
+    run_in_background(get_static_audio(agent_config))
+
 
 app = FastAPI()
 
@@ -79,6 +104,8 @@ async def create_agent(agent_data: CreateAgentPayload):
         redis_client.set(agent_uuid, json.dumps(data_for_db)),
         store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
     )
+    prerender_welcome_audio(data_for_db)
+    prerender_static_audio(data_for_db)
 
     return {"agent_id": agent_uuid, "state": "created"}
 
@@ -122,6 +149,8 @@ async def edit_agent(agent_id: str, agent_data: CreateAgentPayload = Body(...)):
             redis_client.set(agent_id, json.dumps(new_data)),
             store_file(file_key=stored_prompt_file_path, file_data=agent_prompts, local=True),
         )
+        prerender_welcome_audio(new_data)
+        prerender_static_audio(new_data)
 
         return {"agent_id": agent_id, "state": "updated"}
 
@@ -150,7 +179,7 @@ async def delete_agent(agent_id: str):
 async def get_all_agents():
     """Fetches all agents stored in Redis."""
     try:
-        agent_keys = await redis_client.keys("*")
+        agent_keys = [k for k in await redis_client.keys("*") if not k.startswith(AUDIO_CACHE_PREFIXES)]
 
         if not agent_keys:
             return {"agents": []}
@@ -171,41 +200,103 @@ async def get_all_agents():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-async def synthesize_welcome_audio(agent_config):
-    """Pre-renders the welcome message as base64 PCM16 mono 8kHz audio via Cartesia, or returns None."""
-    welcome_text = agent_config.get("agent_welcome_message")
+def cartesia_request(agent_config, transcript, label):
+    """Builds the Cartesia request for `transcript` in the agent's voice, or None if the agent does not use Cartesia."""
     tasks = agent_config.get("tasks") or []
-    if not welcome_text or not tasks:
-        logger.warning("Welcome audio: no welcome message or tasks in agent config, skipping")
-        return None
-
-    synthesizer = tasks[0].get("tools_config", {}).get("synthesizer") or {}
+    synthesizer = (tasks[0].get("tools_config", {}).get("synthesizer") or {}) if tasks else {}
     if synthesizer.get("provider") != "cartesia":
-        logger.warning(f"Welcome audio: synthesizer provider {synthesizer.get('provider')!r} is not 'cartesia', skipping")
+        logger.warning(f"{label}: synthesizer provider {synthesizer.get('provider')!r} is not 'cartesia', skipping")
         return None
 
     provider_config = synthesizer.get("provider_config") or {}
-    headers = {"X-API-Key": os.getenv("CARTESIA_API_KEY"), "Cartesia-Version": "2024-06-10"}
-    payload = {
+    return {
         "model_id": provider_config.get("model") or "sonic-3",
-        "transcript": welcome_text,
+        "transcript": transcript,
         "voice": {"mode": "id", "id": provider_config.get("voice_id")},
         "language": provider_config.get("language") or "en",
         "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 8000},
     }
+
+
+def welcome_audio_request(agent_config):
+    """Builds the Cartesia request for the agent's welcome message, or returns None if there is nothing to render."""
+    welcome_text = agent_config.get("agent_welcome_message")
+    if not welcome_text or not agent_config.get("tasks"):
+        logger.warning("Welcome audio: no welcome message or tasks in agent config, skipping")
+        return None
+    return cartesia_request(agent_config, welcome_text, "Welcome audio")
+
+
+async def get_cached_audio(prefix, payload, label):
+    """Returns base64 audio for a Cartesia request from the Redis cache, rendering and caching it on a miss.
+
+    The cache key covers text, voice, model, language and format, so editing any of
+    them renders new audio."""
+    cache_key = prefix + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    try:
+        cached = await redis_client.get(cache_key)
+        if cached:
+            logger.info(f"{label}: served from cache ({len(cached) * 3 // 4} bytes)")
+            return cached
+    except Exception as e:
+        logger.error(f"{label}: cache read failed: {e}")
+
+    audio = await synthesize_audio(payload, label)
+    if audio:
+        try:
+            await redis_client.set(cache_key, audio, ex=WELCOME_AUDIO_TTL_S)
+        except Exception as e:
+            logger.error(f"{label}: cache write failed: {e}")
+    return audio
+
+
+async def get_welcome_audio(agent_config):
+    """Returns the welcome audio from the Redis cache, rendering and caching it on a miss."""
+    payload = welcome_audio_request(agent_config)
+    if payload is None:
+        return None
+    return await get_cached_audio(WELCOME_AUDIO_PREFIX, payload, "Welcome audio")
+
+
+def static_message_texts(agent_config):
+    """Every language variant of every graph node's static_message, without duplicates."""
+    texts = []
+    for task in agent_config.get("tasks") or []:
+        llm_config = (task.get("tools_config", {}).get("llm_agent") or {}).get("llm_config") or {}
+        for node in llm_config.get("nodes") or []:
+            message = node.get("static_message")
+            variants = message.values() if isinstance(message, dict) else [message]
+            texts.extend(text for text in variants if text and text.strip() and text not in texts)
+    return texts
+
+
+async def get_static_audio(agent_config):
+    """Returns {text: base64 audio} for the agent's static node messages, rendering any cache misses."""
+    texts = static_message_texts(agent_config)
+    payloads = [(text, cartesia_request(agent_config, text, "Static audio")) for text in texts]
+    payloads = [(text, payload) for text, payload in payloads if payload is not None]
+    audios = await asyncio.gather(
+        *(get_cached_audio(STATIC_AUDIO_PREFIX, payload, "Static audio") for _, payload in payloads)
+    )
+    return {text: audio for (text, _), audio in zip(payloads, audios) if audio}
+
+
+async def synthesize_audio(payload, label):
+    """Renders a Cartesia request as base64 PCM16 mono 8kHz audio, or returns None."""
+    headers = {"X-API-Key": os.getenv("CARTESIA_API_KEY"), "Cartesia-Version": "2024-06-10"}
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post("https://api.cartesia.ai/tts/bytes", headers=headers, json=payload) as response:
                 if response.status != 200:
                     body = await response.text()
-                    logger.error(f"Welcome audio: Cartesia returned {response.status}: {body}")
+                    logger.error(f"{label}: Cartesia returned {response.status}: {body}")
                     return None
                 audio = await response.read()
-        logger.info(f"Welcome audio: synthesized {len(audio)} bytes")
+        logger.info(f"{label}: synthesized {len(audio)} bytes")
         return base64.b64encode(audio).decode("utf-8")
     except Exception as e:
-        logger.error(f"Welcome audio: synthesis failed: {e}", exc_info=True)
+        logger.error(f"{label}: synthesis failed: {e}", exc_info=True)
         return None
 
 
@@ -226,8 +317,14 @@ async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: st
         traceback.print_exc()
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    welcome_audio = await synthesize_welcome_audio(agent_config)
-    assistant_manager = AssistantManager(agent_config, websocket, agent_id, welcome_message_audio=welcome_audio)
+    welcome_audio, static_audio = await asyncio.gather(get_welcome_audio(agent_config), get_static_audio(agent_config))
+    assistant_manager = AssistantManager(
+        agent_config,
+        websocket,
+        agent_id,
+        welcome_message_audio=welcome_audio,
+        static_message_audio=static_audio,
+    )
 
     try:
         async for index, task_output in assistant_manager.run(local=True):

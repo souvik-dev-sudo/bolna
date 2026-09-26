@@ -25,7 +25,7 @@
                     },
                     "transcriber": {
                         "provider": "gemini",
-                        "model": "gemini-3.5-transcribe-live",
+                        "model": "gemini-3.5-transcribe-live-preview",
                         "language": "hi",
                         "encoding": "linear16",
                         "stream": true
