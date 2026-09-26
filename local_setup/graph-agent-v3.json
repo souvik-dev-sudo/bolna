@@ -1,6 +1,6 @@
 {
   "agent_config": {
-    "agent_name": "No-Show v3 (Vertex)",
+    "agent_name": "No-Show v3",
     "agent_type": "graph_agent",
     "agent_welcome_message": "Good morning. I am Kavya from Dr. Agarwal's Eye Hospital. Preferred language - English, Hindi or Tamil?",
     "tasks": [
@@ -93,9 +93,9 @@
             "agent_type": "graph_agent",
             "agent_flow_type": "streaming",
             "llm_config": {
-              "provider": "google",
-              "family": "google",
-              "model": "gemini-2.5-flash",
+              "provider": "openai",
+              "family": "openai",
+              "model": "gpt-4o-mini",
               "max_tokens": 250,
               "temperature": 0.3,
               "top_p": 0.9,
@@ -105,8 +105,8 @@
               "frequency_penalty": 0,
               "request_json": false,
               "use_responses_api": false,
-              "routing_provider": "google",
-              "routing_model": "gemini-2.5-flash",
+              "routing_provider": "openai",
+              "routing_model": "gpt-4.1-mini",
               "routing_max_tokens": 50,
               "current_node_id": "Start",
               "context_data": {

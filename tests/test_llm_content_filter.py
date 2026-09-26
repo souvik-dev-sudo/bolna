@@ -92,6 +92,7 @@ def _graph_stub(error):
     agent._node_type_of.return_value = NodeType.LLM
     agent._should_hold_for_first_delivery.return_value = False
     agent.decide_next_node_with_functions = AsyncMock(side_effect=error)
+    agent._speculate_current_node = lambda *a, **k: GraphAgent._speculate_current_node(agent, *a, **k)
     return agent
 
 
@@ -131,6 +132,7 @@ async def test_the_filtered_turn_speaks_nothing_end_to_end():
     agent.llm.generate_stream = lambda *a, **k: AzureLLM._generate_stream_chat(azure, *a, **k)
     # The node resolves its own conversation LLM now; this node overrides nothing, so it is agent.llm.
     agent._conversation_llm_for.return_value = agent.llm
+    agent._speculate_current_node = lambda *a, **k: GraphAgent._speculate_current_node(agent, *a, **k)
 
     chunks = []
     with pytest.raises(BadRequestError):
