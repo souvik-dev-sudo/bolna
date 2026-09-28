@@ -27,6 +27,7 @@ PLIVO_AUTH_ID=$(secret plivo-auth-id)
 PLIVO_AUTH_TOKEN=$(secret plivo-auth-token)
 PLIVO_PHONE_NUMBER=$(secret plivo-phone-number)
 TEST_CALL_PIN=$(secret test-call-pin 2>/dev/null || true)
+CALL_TRANSFER_WEBHOOK_URL=http://plivo-app:8002/transfer_call
 GEMINI_USE_VERTEX=true
 GOOGLE_CLOUD_PROJECT=${PROJECT_ID}
 GEMINI_LLM_LOCATION=global

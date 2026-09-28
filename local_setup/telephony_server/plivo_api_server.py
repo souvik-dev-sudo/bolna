@@ -7,6 +7,7 @@ import requests
 import uuid
 from collections import deque
 from pathlib import Path
+from urllib.parse import quote
 from dotenv import load_dotenv
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -102,6 +103,49 @@ async def plivo_connect(request: Request, bolna_host: str = Query(...), agent_id
 async def plivo_hangup_callback(request: Request):
     # add any post call hangup processing
     return PlainTextResponse("", status_code=200)
+
+
+# --- Call transfer -----------------------------------------------------------
+# Bolna POSTs here (CALL_TRANSFER_WEBHOOK_URL) when a transfer tool has no url of its
+# own. The caller's leg is moved to /plivo_transfer_xml, which dials the transfer number.
+E164_NUMBER = re.compile(r"^\+\d{8,15}$", re.ASCII)
+
+
+@app.post("/transfer_call")
+async def transfer_call(request: Request):
+    body = await request.json()
+    call_sid = body.get("call_sid")
+    number = body.get("call_transfer_number")
+    if not call_sid or not number:
+        raise HTTPException(status_code=400, detail="call_sid and call_transfer_number are required")
+    # Checked here too: Plivo drops the caller if the transfer XML it fetches is an error.
+    if not E164_NUMBER.fullmatch(str(number)):
+        raise HTTPException(status_code=400, detail="call_transfer_number must be E.164, e.g. +919876543210")
+
+    try:
+        telephony_host, _ = populate_ngrok_tunnels()
+        plivo_client.calls.transfer(
+            call_uuid=call_sid,
+            legs="aleg",
+            aleg_url=f"{telephony_host}/plivo_transfer_xml?number={quote(number, safe='')}",
+            aleg_method="POST",
+        )
+    except Exception as e:
+        print(f"Exception occurred in transfer_call for {call_sid}: {e}")
+        raise HTTPException(status_code=502, detail="Could not transfer the call")
+
+    print(f"Transferred call {call_sid} to {number}")
+    return JSONResponse({"status": "transferred"})
+
+
+@app.api_route("/plivo_transfer_xml", methods=["GET", "POST"])
+async def plivo_transfer_xml(number: str = Query(...)):
+    # Validated before it goes into the XML.
+    if not E164_NUMBER.fullmatch(number):
+        raise HTTPException(status_code=400, detail="Invalid transfer number")
+
+    response = f'<Response><Dial callerId="{plivo_phone_number}"><Number>{number}</Number></Dial></Response>'
+    return PlainTextResponse(response, status_code=200, media_type="text/xml")
 
 
 # --- Browser test page: /test-call -------------------------------------------
