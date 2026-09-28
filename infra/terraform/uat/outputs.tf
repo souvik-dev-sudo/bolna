@@ -19,6 +19,11 @@ output "artifact_registry" {
   value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.bolna.repository_id}"
 }
 
+output "recordings_bucket" {
+  description = "GCS bucket for call recordings (RECORDINGS_BUCKET)"
+  value       = google_storage_bucket.call_recordings.name
+}
+
 output "secret_ids" {
   description = "Env var name -> Secret Manager secret ID"
   value       = { for k, s in google_secret_manager_secret.app : k => s.secret_id }

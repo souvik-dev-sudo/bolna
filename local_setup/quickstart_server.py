@@ -379,6 +379,9 @@ async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: st
     try:
         async for index, task_output in assistant_manager.run(local=True):
             logger.info(task_output)
+            if index == 0:
+                # Links the call's transcript and latencies (run_id) to its recording (Plivo CallUUID).
+                logger.info(f"call_summary run_id={task_output.get('run_id')} call_sid={task_output.get('call_sid')}")
     except WebSocketDisconnect:
         active_websockets.remove(websocket)
     except Exception as e:

@@ -6,11 +6,12 @@ import time
 import requests
 import uuid
 from collections import deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 from dotenv import load_dotenv
 import redis.asyncio as redis
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 import plivo
 
@@ -82,16 +83,36 @@ async def make_call(request: Request):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
+async def _form(request: Request):
+    """Plivo posts application/x-www-form-urlencoded; parsed here so python-multipart is not needed."""
+    return {key: values[0] for key, values in parse_qs((await request.body()).decode()).items()}
+
+
 @app.post("/plivo_connect")
 async def plivo_connect(request: Request, bolna_host: str = Query(...), agent_id: str = Query(...)):
     try:
+        form = await _form(request)
+        print(f"plivo_connect CallUUID={form.get('CallUUID')} agent_id={agent_id}")
         bolna_websocket_url = f"{bolna_host}/chat/v1/{agent_id}"
+
+        # Records both legs in the background; the call goes on to the Stream at once. A failed
+        # tunnel lookup only loses the recording, not the call.
+        record = ""
+        try:
+            telephony_host, _ = populate_ngrok_tunnels()
+            record = (
+                '<Record recordSession="true" redirect="false" maxLength="3600" fileFormat="mp3" '
+                f'callbackUrl="{telephony_host}/plivo_recording_callback" callbackMethod="POST" />'
+            )
+        except Exception as e:
+            print(f"Exception occurred looking up the recording callback host: {e}")
 
         response = """
         <Response>
+            {}
             <Stream bidirectional="true" keepCallAlive="true">{}</Stream>
         </Response>
-        """.format(bolna_websocket_url)
+        """.format(record, bolna_websocket_url)
 
         return PlainTextResponse(str(response), status_code=200, media_type="text/xml")
 
@@ -102,6 +123,61 @@ async def plivo_connect(request: Request, bolna_host: str = Query(...), agent_id
 @app.post("/plivo_hangup_callback")
 async def plivo_hangup_callback(request: Request):
     # add any post call hangup processing
+    return PlainTextResponse("", status_code=200)
+
+
+# --- Call recording ----------------------------------------------------------
+# Plivo posts here once a <Record recordSession> file is ready. The MP3 is copied to
+# gs://$RECORDINGS_BUCKET/recordings/<IST date>/<CallUUID>.mp3; the call_summary line
+# bolna-app logs maps that CallUUID (call_sid) to the run_id of its transcript.
+IST = timezone(timedelta(hours=5, minutes=30))
+CALL_UUID = re.compile(r"[A-Za-z0-9-]+")
+
+
+def _is_plivo_url(url):
+    # The download carries our Plivo credentials, so it must only ever go to Plivo.
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    return parsed.scheme == "https" and (host == "plivo.com" or host.endswith(".plivo.com"))
+
+
+def _gcs_client():
+    from google.cloud import storage  # Application Default Credentials: the VM service account
+
+    return storage.Client()
+
+
+def save_recording(record_url, call_uuid, recording_id, duration_s):
+    bucket = os.getenv("RECORDINGS_BUCKET")
+    if not bucket:
+        print(f"RECORDINGS_BUCKET unset, not uploading {record_url} (CallUUID={call_uuid})")
+        return
+
+    path = f"recordings/{datetime.now(IST):%Y-%m-%d}/{call_uuid}.mp3"
+    try:
+        audio = requests.get(record_url, auth=(plivo_auth_id, plivo_auth_token), timeout=60)
+        audio.raise_for_status()
+        blob = _gcs_client().bucket(bucket).blob(path)
+        blob.metadata = {"call_uuid": call_uuid, "recording_id": recording_id, "duration_s": duration_s}
+        blob.upload_from_string(audio.content, content_type="audio/mpeg")
+        print(f"recording saved gs://{bucket}/{path}")
+    except Exception as e:
+        print(f"Exception occurred saving recording {record_url} to gs://{bucket}/{path}: {e}")
+
+
+@app.post("/plivo_recording_callback")
+async def plivo_recording_callback(request: Request, background_tasks: BackgroundTasks):
+    form = await _form(request)
+    record_url = form.get("RecordUrl")
+    call_uuid = form.get("CallUUID", "")
+    if not record_url or not _is_plivo_url(record_url):
+        raise HTTPException(status_code=400, detail="RecordUrl must be a Plivo https URL")
+    if not CALL_UUID.fullmatch(call_uuid):
+        raise HTTPException(status_code=400, detail="Invalid CallUUID")
+
+    background_tasks.add_task(
+        save_recording, record_url, call_uuid, form.get("RecordingID"), form.get("RecordingDuration")
+    )
     return PlainTextResponse("", status_code=200)
 
 

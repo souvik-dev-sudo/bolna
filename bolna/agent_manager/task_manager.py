@@ -9104,7 +9104,8 @@ class TaskManager(BaseManager):
                     "lid_detection_events": list(self.__snapshot_lid_events()),
                     "asr_lid_events": self._collect_flux_lid_events(),
                     "language_switch_events": list(self.language_switch_events),
-                    "call_sid": self.call_sid,
+                    # Plivo may never set call_sid from a start event; the input handler still has it.
+                    "call_sid": self.call_sid or getattr(self.tools.get("input"), "get_call_sid", lambda: None)(),
                     "stream_sid": self.stream_sid,
                     "transcriber_duration": self.transcriber_duration,
                     "synthesizer_characters": (

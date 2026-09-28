@@ -11,6 +11,10 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 # test at a live account. Tests needing any other provider credential supply it themselves.
 os.environ["OPENAI_API_KEY"] = "test-key"
 
+import importlib.util  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import httpx  # noqa: E402
 import pytest  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock
 
@@ -73,3 +77,34 @@ def language_switch_tm(monkeypatch):
         return tm
 
     return _build
+
+
+_PLIVO_SERVER_PATH = Path(__file__).resolve().parent.parent / "local_setup" / "telephony_server" / "plivo_api_server.py"
+
+
+@pytest.fixture(scope="session")
+def plivo_server():
+    """local_setup's plivo_api_server module, loaded with placeholder Plivo credentials."""
+    with pytest.MonkeyPatch.context() as mp:
+        # Its load_dotenv() would pull local_setup/.env's real keys into the whole test session.
+        mp.setattr("dotenv.load_dotenv", lambda *args, **kwargs: False)
+        # The module builds a Plivo client at import, which needs a well-formed auth id.
+        mp.setenv("PLIVO_AUTH_ID", "MAPLACEHOLDER0000000")
+        mp.setenv("PLIVO_AUTH_TOKEN", "placeholder-token")
+        mp.setenv("PLIVO_PHONE_NUMBER", "+918000000000")
+        spec = importlib.util.spec_from_file_location("plivo_api_server", _PLIVO_SERVER_PATH)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def plivo_request(plivo_server):
+    """Sends one request to plivo_api_server's app in process; background tasks finish before it returns."""
+
+    async def _request(method, url, **kwargs):
+        transport = httpx.ASGITransport(app=plivo_server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://plivo-app") as client:
+            return await client.request(method, url, **kwargs)
+
+    return _request
