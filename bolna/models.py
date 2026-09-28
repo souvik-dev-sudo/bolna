@@ -206,6 +206,8 @@ class Synthesizer(BaseModel):
     buffer_size: Optional[int] = 40  # 40 characters in a buffer
     audio_format: Optional[str] = "pcm"
     caching: Optional[bool] = True
+    multilingual: Optional[Dict[str, Any]] = None
+    active: Optional[str] = None
 
     @model_validator(mode="before")
     def preprocess(cls, values):

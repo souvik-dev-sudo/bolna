@@ -21,6 +21,7 @@ OPENAI_API_KEY=$(secret openai-api-key)
 GEMINI_API_KEY=${GEMINI_API_KEY}
 GOOGLE_API_KEY=${GEMINI_API_KEY}
 CARTESIA_API_KEY=$(secret cartesia-api-key)
+SARVAM_API_KEY=$(secret sarvam-api-key)
 REDIS_URL=redis://redis:6379
 PLIVO_AUTH_ID=$(secret plivo-auth-id)
 PLIVO_AUTH_TOKEN=$(secret plivo-auth-token)

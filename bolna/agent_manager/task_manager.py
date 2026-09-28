@@ -1845,9 +1845,9 @@ class TaskManager(BaseManager):
             synth_config = self.task_config["tools_config"]["synthesizer"]
 
             # --- Multilingual pool path ---
-            if "multilingual" in synth_config:
+            if "multilingual" in synth_config and synth_config.get("multilingual"):
                 multilingual = synth_config["multilingual"]
-                active_label = synth_config.get("active", DEFAULT_LANGUAGE_CODE)
+                active_label = synth_config.get("active") or DEFAULT_LANGUAGE_CODE
                 if hasattr(self, "language_detector"):
                     self.language_detector.set_enabled_status(
                         False

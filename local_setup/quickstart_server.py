@@ -2,13 +2,16 @@ import os
 import asyncio
 import base64
 import hashlib
+import io
 import uuid
+import wave
 import traceback
 import aiohttp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as redis
 from dotenv import load_dotenv
+from bolna.constants import DEFAULT_LANGUAGE_CODE
 from bolna.helpers.utils import store_file
 from bolna.prompts import *
 from bolna.helpers.logger_config import configure_logger
@@ -200,38 +203,64 @@ async def get_all_agents():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-def cartesia_request(agent_config, transcript, label):
-    """Builds the Cartesia request for `transcript` in the agent's voice, or None if the agent does not use Cartesia."""
-    tasks = agent_config.get("tasks") or []
-    synthesizer = (tasks[0].get("tools_config", {}).get("synthesizer") or {}) if tasks else {}
-    if synthesizer.get("provider") != "cartesia":
-        logger.warning(f"{label}: synthesizer provider {synthesizer.get('provider')!r} is not 'cartesia', skipping")
-        return None
+CARTESIA_TTS_URL = "https://api.cartesia.ai/tts/bytes"
+SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
 
+
+def agent_synthesizer(agent_config):
+    tasks = agent_config.get("tasks") or []
+    return (tasks[0].get("tools_config", {}).get("synthesizer") or {}) if tasks else {}
+
+
+def synthesizer_config(agent_config, language):
+    """The synthesizer that speaks `language`: synthesizer.multilingual[language] if present, else the
+    top-level synthesizer, mirroring TaskManager's SynthesizerPool."""
+    synthesizer = agent_synthesizer(agent_config)
+    return (synthesizer.get("multilingual") or {}).get(language) or synthesizer
+
+
+def tts_request(synthesizer, transcript, label):
+    """(provider, payload) for rendering `transcript` in the synthesizer's voice as PCM16 mono 8kHz,
+    or None if the provider is not supported."""
+    provider = synthesizer.get("provider")
     provider_config = synthesizer.get("provider_config") or {}
-    return {
-        "model_id": provider_config.get("model") or "sonic-3",
-        "transcript": transcript,
-        "voice": {"mode": "id", "id": provider_config.get("voice_id")},
-        "language": provider_config.get("language") or "en",
-        "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 8000},
-    }
+    if provider == "cartesia":
+        return provider, {
+            "model_id": provider_config.get("model") or "sonic-3",
+            "transcript": transcript,
+            "voice": {"mode": "id", "id": provider_config.get("voice_id")},
+            "language": provider_config.get("language") or "en",
+            "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 8000},
+        }
+    if provider == "sarvam":
+        # target_language_code is the configured language as is, as SarvamSynthesizer sends it.
+        return provider, {
+            "text": transcript,
+            "target_language_code": provider_config.get("language"),
+            "speaker": provider_config.get("voice_id"),
+            "model": provider_config.get("model"),
+            "speech_sample_rate": 8000,
+        }
+    logger.warning(f"{label}: synthesizer provider {provider!r} is not supported, skipping")
+    return None
 
 
 def welcome_audio_request(agent_config):
-    """Builds the Cartesia request for the agent's welcome message, or returns None if there is nothing to render."""
+    """(provider, payload) for the agent's welcome message in the active language, or None if there is nothing to render."""
     welcome_text = agent_config.get("agent_welcome_message")
     if not welcome_text or not agent_config.get("tasks"):
         logger.warning("Welcome audio: no welcome message or tasks in agent config, skipping")
         return None
-    return cartesia_request(agent_config, welcome_text, "Welcome audio")
+    active = agent_synthesizer(agent_config).get("active") or DEFAULT_LANGUAGE_CODE
+    return tts_request(synthesizer_config(agent_config, active), welcome_text, "Welcome audio")
 
 
-async def get_cached_audio(prefix, payload, label):
-    """Returns base64 audio for a Cartesia request from the Redis cache, rendering and caching it on a miss.
+async def get_cached_audio(prefix, request, label):
+    """Returns base64 audio for a TTS request from the Redis cache, rendering and caching it on a miss.
 
     The cache key covers text, voice, model, language and format, so editing any of
     them renders new audio."""
+    provider, payload = request
     cache_key = prefix + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     try:
         cached = await redis_client.get(cache_key)
@@ -241,7 +270,7 @@ async def get_cached_audio(prefix, payload, label):
     except Exception as e:
         logger.error(f"{label}: cache read failed: {e}")
 
-    audio = await synthesize_audio(payload, label)
+    audio = await synthesize_audio(provider, payload, label)
     if audio:
         try:
             await redis_client.set(cache_key, audio, ex=WELCOME_AUDIO_TTL_S)
@@ -252,47 +281,68 @@ async def get_cached_audio(prefix, payload, label):
 
 async def get_welcome_audio(agent_config):
     """Returns the welcome audio from the Redis cache, rendering and caching it on a miss."""
-    payload = welcome_audio_request(agent_config)
-    if payload is None:
+    request = welcome_audio_request(agent_config)
+    if request is None:
         return None
-    return await get_cached_audio(WELCOME_AUDIO_PREFIX, payload, "Welcome audio")
+    return await get_cached_audio(WELCOME_AUDIO_PREFIX, request, "Welcome audio")
 
 
 def static_message_texts(agent_config):
-    """Every language variant of every graph node's static_message, without duplicates."""
+    """(text, language) for every variant of every graph node's static_message, without duplicate texts.
+    A plain-string message has no language and is spoken by the top-level synthesizer."""
     texts = []
     for task in agent_config.get("tasks") or []:
         llm_config = (task.get("tools_config", {}).get("llm_agent") or {}).get("llm_config") or {}
         for node in llm_config.get("nodes") or []:
             message = node.get("static_message")
-            variants = message.values() if isinstance(message, dict) else [message]
-            texts.extend(text for text in variants if text and text.strip() and text not in texts)
+            variants = message.items() if isinstance(message, dict) else [(None, message)]
+            for language, text in variants:
+                if text and text.strip() and text not in (t for t, _ in texts):
+                    texts.append((text, language))
     return texts
 
 
 async def get_static_audio(agent_config):
     """Returns {text: base64 audio} for the agent's static node messages, rendering any cache misses."""
-    texts = static_message_texts(agent_config)
-    payloads = [(text, cartesia_request(agent_config, text, "Static audio")) for text in texts]
-    payloads = [(text, payload) for text, payload in payloads if payload is not None]
+    requests = [
+        (text, tts_request(synthesizer_config(agent_config, language), text, "Static audio"))
+        for text, language in static_message_texts(agent_config)
+    ]
+    requests = [(text, request) for text, request in requests if request is not None]
     audios = await asyncio.gather(
-        *(get_cached_audio(STATIC_AUDIO_PREFIX, payload, "Static audio") for _, payload in payloads)
+        *(get_cached_audio(STATIC_AUDIO_PREFIX, request, "Static audio") for _, request in requests)
     )
-    return {text: audio for (text, _), audio in zip(payloads, audios) if audio}
+    return {text: audio for (text, _), audio in zip(requests, audios) if audio}
 
 
-async def synthesize_audio(payload, label):
-    """Renders a Cartesia request as base64 PCM16 mono 8kHz audio, or returns None."""
-    headers = {"X-API-Key": os.getenv("CARTESIA_API_KEY"), "Cartesia-Version": "2024-06-10"}
+def sarvam_pcm(body):
+    """Raw PCM16 mono 8kHz from Sarvam's {"audios": [base64 WAV]} response."""
+    audios = json.loads(body).get("audios") or []
+    if not audios:
+        raise ValueError("Sarvam returned no audio")
+    with wave.open(io.BytesIO(base64.b64decode(audios[0]))) as wav:
+        params = (wav.getnchannels(), wav.getsampwidth(), wav.getframerate())
+        if params != (1, 2, 8000):
+            raise ValueError(f"Sarvam returned (channels, sample width, rate) {params}, expected (1, 2, 8000)")
+        return wav.readframes(wav.getnframes())
+
+
+async def synthesize_audio(provider, payload, label):
+    """Renders a TTS request as base64 PCM16 mono 8kHz audio, or returns None."""
+    if provider == "sarvam":
+        url, headers = SARVAM_TTS_URL, {"api-subscription-key": os.getenv("SARVAM_API_KEY")}
+    else:
+        url, headers = CARTESIA_TTS_URL, {"X-API-Key": os.getenv("CARTESIA_API_KEY"), "Cartesia-Version": "2024-06-10"}
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post("https://api.cartesia.ai/tts/bytes", headers=headers, json=payload) as response:
+            async with session.post(url, headers=headers, json=payload) as response:
                 if response.status != 200:
                     body = await response.text()
-                    logger.error(f"{label}: Cartesia returned {response.status}: {body}")
+                    logger.error(f"{label}: {provider} returned {response.status}: {body}")
                     return None
-                audio = await response.read()
+                body = await response.read()
+        audio = sarvam_pcm(body) if provider == "sarvam" else body
         logger.info(f"{label}: synthesized {len(audio)} bytes")
         return base64.b64encode(audio).decode("utf-8")
     except Exception as e:

@@ -7,6 +7,7 @@ locals {
     OPENAI_API_KEY     = "${var.name_prefix}-openai-api-key"
     GEMINI_API_KEY     = "${var.name_prefix}-gemini-api-key"
     CARTESIA_API_KEY   = "${var.name_prefix}-cartesia-api-key"
+    SARVAM_API_KEY     = "${var.name_prefix}-sarvam-api-key"
     PLIVO_AUTH_ID      = "${var.name_prefix}-plivo-auth-id"
     PLIVO_AUTH_TOKEN   = "${var.name_prefix}-plivo-auth-token"
     PLIVO_PHONE_NUMBER = "${var.name_prefix}-plivo-phone-number"
