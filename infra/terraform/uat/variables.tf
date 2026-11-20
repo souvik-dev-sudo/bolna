@@ -67,3 +67,9 @@ variable "budget_amount_inr" {
   type        = number
   default     = 8000
 }
+
+variable "backend_allowed_cidrs" {
+  description = "Source CIDRs allowed to reach bolna-app :5001 and plivo-app :8002 directly; empty = no rule"
+  type        = list(string)
+  default     = []
+}
