@@ -6,7 +6,7 @@ set -euo pipefail
 export PATH="$PATH:/snap/bin" REGISTRY IMAGE_TAG
 
 APP_DIR=/opt/bolna/local_setup
-SERVICES="redis bolna-app plivo-app proxy ngrok"
+SERVICES="redis postgres bolna-app plivo-app proxy ngrok"
 cd "$APP_DIR"
 
 secret() {
@@ -16,6 +16,7 @@ secret() {
 echo "==> Writing .env and ngrok config from Secret Manager"
 umask 077
 GEMINI_API_KEY=$(secret gemini-api-key)
+PG_PASSWORD=$(secret postgres-password)
 cat > .env <<EOF
 OPENAI_API_KEY=$(secret openai-api-key)
 GEMINI_API_KEY=${GEMINI_API_KEY}
@@ -33,13 +34,19 @@ GEMINI_USE_VERTEX=true
 GOOGLE_CLOUD_PROJECT=${PROJECT_ID}
 GEMINI_LLM_LOCATION=global
 GEMINI_STT_LOCATION=global
+POSTGRES_USER=bolna
+POSTGRES_PASSWORD=${PG_PASSWORD}
+POSTGRES_DB=bolna
+DATABASE_URL=postgresql://bolna:${PG_PASSWORD}@postgres:5432/bolna
 EOF
 sed "s|^authtoken:.*|authtoken: \"$(secret ngrok-authtoken)\"|" ngrok-config.yml > ngrok-config.cloud.yml
 umask 022
-# The ngrok and redis containers run as non-root users (uid 1000 and 999)
+# The ngrok, redis and postgres containers run as non-root users (uid 1000, 999 and 70)
 chown 1000 ngrok-config.cloud.yml
 mkdir -p /mnt/redis-data/redis
 chown 999:999 /mnt/redis-data/redis
+mkdir -p /mnt/redis-data/postgres
+chown 70:70 /mnt/redis-data/postgres
 
 # Paths docker-compose.yml mounts into bolna-app
 mkdir -p /opt/bolna/agent_data "$HOME/.aws"

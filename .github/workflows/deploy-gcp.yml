@@ -23,13 +23,13 @@ permissions:
 
 # Identifiers from `terraform output` (not secrets)
 env:
-  PROJECT_ID: bolna-voice-uat
+  PROJECT_ID: bolna-voice-uat-2
   REGION: asia-south1
   ZONE: asia-south1-a
   VM_NAME: bolna-uat
-  REGISTRY: asia-south1-docker.pkg.dev/bolna-voice-uat/bolna
-  WORKLOAD_IDENTITY_PROVIDER: projects/542174357272/locations/global/workloadIdentityPools/bolna-github/providers/github-oidc
-  DEPLOYER_SA: bolna-deployer@bolna-voice-uat.iam.gserviceaccount.com
+  REGISTRY: asia-south1-docker.pkg.dev/bolna-voice-uat-2/bolna
+  WORKLOAD_IDENTITY_PROVIDER: projects/150444809078/locations/global/workloadIdentityPools/bolna-github/providers/github-oidc
+  DEPLOYER_SA: bolna-deployer@bolna-voice-uat-2.iam.gserviceaccount.com
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
