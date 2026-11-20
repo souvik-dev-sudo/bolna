@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Wordmark, BrandMark } from "@/components/brand/Wordmark";
 import { Avatar } from "@/components/ui/misc";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Tooltip } from "@/components/ui/overlays";
+import { HospitalSwitcher } from "./HospitalSwitcher";
 import { logout } from "@/services/auth";
 import { app } from "@/config/app";
 import { navigation } from "@/config/navigation";
@@ -191,13 +192,16 @@ export function AppLayout() {
       {/* Mobile top bar + drawer */}
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-card px-4 lg:hidden">
         <Wordmark showProduct={false} />
-        <button
-          className="rounded-md p-2 hover:bg-muted"
-          onClick={() => setMobileOpen((o) => !o)}
-          aria-label={mobileOpen ? "Close menu" : "Open menu"}
-        >
-          {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-        </button>
+        <div className="flex items-center gap-2">
+          <HospitalSwitcher compact />
+          <button
+            className="rounded-md p-2 hover:bg-muted"
+            onClick={() => setMobileOpen((o) => !o)}
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
+          >
+            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+        </div>
       </header>
       {mobileOpen && (
         <div className="fixed inset-x-0 top-14 z-30 border-b bg-card px-4 py-4 shadow-card lg:hidden">
@@ -206,6 +210,18 @@ export function AppLayout() {
       )}
 
       <main className={cn("transition-[padding] duration-200", collapsed ? "lg:pl-[72px]" : "lg:pl-64")}>
+        {/* Desktop top bar: the super admin's hospital switcher, top right. 64px tall like the
+            sidebar's logo row; its right edge lines up with the page content below. */}
+        <div className="sticky top-0 z-20 hidden h-16 border-b bg-card/90 backdrop-blur lg:block">
+          <div
+            className={cn(
+              "flex h-full items-center justify-end",
+              fullBleed ? "px-4 md:px-6" : "mx-auto max-w-[1360px] px-4 md:px-8",
+            )}
+          >
+            <HospitalSwitcher />
+          </div>
+        </div>
         {fullBleed ? (
           <Outlet />
         ) : (

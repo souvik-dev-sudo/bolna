@@ -8,13 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/misc";
-import { app } from "@/config/app";
 import { callStatuses, type CallStatus } from "@/config/calls";
 import { CallStatusBadge } from "@/features/calls/CallStatusBadge";
 import { agentPath } from "@/features/agents/CreateAgentDialog";
 import { useAgents, useAgentServerHealth, useCalls, useCallsPerDay, useCallStats, useDatabaseHealth } from "@/hooks/queries";
 import { formatDay, formatDuration, formatNumber, formatPercent, relativeTime } from "@/lib/format";
 import { chart, gradients, tones } from "@/theme/theme";
+import { useHospital } from "@/hooks/useHospital";
 
 function greeting() {
   const h = new Date().getHours();
@@ -116,6 +116,7 @@ function HealthRow({ icon: Icon, label, ok, loading, detail }: { icon: typeof Se
 }
 
 export function OverviewPage() {
+  const [hospital] = useHospital();
   const weekAgo = useMemo(() => new Date(Date.now() - 7 * 86_400_000).toISOString(), []);
   const stats = useCallStats({ from: weekAgo });
   const recent = useCalls({ page: 1, pageSize: 6 });
@@ -131,7 +132,7 @@ export function OverviewPage() {
         <div className="absolute inset-0 bg-gradient-to-r from-white via-white/85 to-white/30" />
         <div className="relative flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-medium text-primary">{app.workspace.name}</p>
+            <p className="text-sm font-medium text-primary">{hospital.name}</p>
             <h1 className="mt-1 text-[28px] font-semibold leading-tight md:text-[32px]">{greeting()}</h1>
             <p className="mt-1.5 max-w-lg text-sm text-muted-foreground">
               Your voice agents handled <strong className="text-heading">{s ? formatNumber(s.total) : "…"} calls</strong> in the last 7 days.

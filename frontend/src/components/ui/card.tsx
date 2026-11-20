@@ -7,7 +7,8 @@ const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
       ref={ref}
       className={cn(
         "rounded-xl border bg-card text-card-foreground shadow-soft",
-        interactive && "transition-all duration-200 hover:-translate-y-0.5 hover:border-primary-border hover:shadow-card",
+        // Hover: border colour and shadow only. The card never moves, so its text can't shake.
+        interactive && "transition-[border-color,box-shadow] duration-200 hover:border-primary-border hover:shadow-card",
         className,
       )}
       {...props}

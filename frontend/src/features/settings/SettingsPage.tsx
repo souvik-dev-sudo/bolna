@@ -8,10 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, Tabs, TabsContent, TabsList, TabsTrigger, Td, Th } from "@/components/ui/misc";
 import { Select } from "@/components/ui/select";
-import { app } from "@/config/app";
 import { languages } from "@/config/languages";
 import { llmProviders, telephonyProviders, transcriberProviders, voiceProviders } from "@/config/providers";
 import { useAgents } from "@/hooks/queries";
+import { useHospital } from "@/hooks/useHospital";
 
 function ProviderGroup({ icon, title, providers }: { icon: typeof Plug; title: string; providers: readonly { id: string; label: string; configured: boolean }[] }) {
   return (
@@ -43,6 +43,7 @@ const numbers = [
 ];
 
 export function SettingsPage() {
+  const [hospital] = useHospital();
   const { data: agents = [] } = useAgents();
   return (
     <>
@@ -111,7 +112,7 @@ export function SettingsPage() {
           <SectionCard icon={Building2} title="Workspace" className="max-w-2xl">
             <div className="flex flex-col gap-4">
               <Field label="Workspace name">
-                <Input defaultValue={app.workspace.name} />
+                <Input key={hospital.id} defaultValue={hospital.name} />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Time zone">

@@ -1,6 +1,18 @@
 import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Bot, ChevronDown, Copy, FileJson, GitBranch, LayoutTemplate, MoreHorizontal, Plus, Search, Trash2, Workflow } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  Copy,
+  FileJson,
+  GitBranch,
+  LayoutTemplate,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Trash2,
+  Workflow,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
@@ -11,33 +23,65 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/misc";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/overlays";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/overlays";
 import { languageName } from "@/config/languages";
-import { useAgents, useDeleteAgent, useDuplicateAgent, useImportAgent } from "@/hooks/queries";
-import type { BolnaAgentPayload } from "@/types/agent";
+import {
+  useAgents,
+  useDeleteAgent,
+  useDuplicateAgent,
+  useImportAgent,
+} from "@/hooks/queries";
 import { relativeTime } from "@/lib/format";
 import type { AgentKind, AgentSummary } from "@/types/agent";
+import { isGraphPayload, normalizeAgentJson } from "@/services/agents";
 import { agentPath, CreateAgentDialog } from "./CreateAgentDialog";
 
 /** "Graph agent" / "Simple agent", as Bolna labels an agent's type. */
-const typeLabel = (kind: AgentKind) => (kind === "graph" ? "Graph agent" : "Simple agent");
+const typeLabel = (kind: AgentKind) =>
+  kind === "graph" ? "Graph agent" : "Simple agent";
 
-function AgentCard({ agent, onDelete, inStudio }: { agent: AgentSummary; onDelete: () => void; inStudio: boolean }) {
+function AgentCard({
+  agent,
+  onDelete,
+  inStudio,
+}: {
+  agent: AgentSummary;
+  onDelete: () => void;
+  inStudio: boolean;
+}) {
   const navigate = useNavigate();
   const duplicate = useDuplicateAgent();
   // Agent Studio opens every agent (graph ones too) in its tabbed editor; the Graph Agent page opens the graph editor.
-  const path = inStudio ? `/agents/${agent.id}` : agentPath(agent.id, agent.kind);
+  const path = inStudio
+    ? `/agents/${agent.id}`
+    : agentPath(agent.id, agent.kind);
   const graphPath = agentPath(agent.id, "graph");
 
   return (
     <Card interactive className="group relative flex flex-col">
-      <Link to={path} className="flex flex-1 flex-col gap-4 p-5" aria-label={`Open ${agent.name}`}>
+      <Link
+        to={path}
+        className="flex flex-1 flex-col gap-4 p-5"
+        aria-label={`Open ${agent.name}`}
+      >
         <div className="flex items-start gap-3 pr-8">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">
-            {agent.kind === "graph" ? <GitBranch className="h-5 w-5" /> : <Bot className="h-5 w-5" />}
+            {agent.kind === "graph" ? (
+              <GitBranch className="h-5 w-5" />
+            ) : (
+              <Bot className="h-5 w-5" />
+            )}
           </span>
           <div className="min-w-0">
-            <h3 className="truncate text-[15px] font-semibold text-heading group-hover:text-primary-hover">{agent.name}</h3>
+            <h3 className="truncate text-[15px] font-semibold text-heading group-hover:text-primary-hover">
+              {agent.name}
+            </h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {typeLabel(agent.kind)} · Updated {relativeTime(agent.updatedAt)}
             </p>
@@ -60,7 +104,10 @@ function AgentCard({ agent, onDelete, inStudio }: { agent: AgentSummary; onDelet
             <ProviderIcon id={agent.transcriberProvider} /> STT
           </span>
           <span className="flex items-center gap-1.5">
-            <ProviderIcon id={agent.llmModel.startsWith("gemini") ? "google" : "openai"} /> {agent.llmModel}
+            <ProviderIcon
+              id={agent.llmModel.startsWith("gemini") ? "google" : "openai"}
+            />{" "}
+            {agent.llmModel}
           </span>
           <span className="flex items-center gap-1.5">
             <ProviderIcon id={agent.voiceProvider} /> Voice
@@ -69,7 +116,12 @@ function AgentCard({ agent, onDelete, inStudio }: { agent: AgentSummary; onDelet
       </Link>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" className="absolute right-3 top-3" aria-label="Agent actions">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="absolute right-3 top-3"
+            aria-label="Agent actions"
+          >
             <MoreHorizontal />
           </Button>
         </DropdownMenuTrigger>
@@ -78,14 +130,20 @@ function AgentCard({ agent, onDelete, inStudio }: { agent: AgentSummary; onDelet
             <Bot /> Open
           </DropdownMenuItem>
           {agent.kind === "graph" && (
-            <DropdownMenuItem onSelect={() => navigate(inStudio ? graphPath : `/agents/${agent.id}`)}>
-              <GitBranch /> {inStudio ? "Open in Graph editor" : "Open in Agent Studio"}
+            <DropdownMenuItem
+              onSelect={() =>
+                navigate(inStudio ? graphPath : `/agents/${agent.id}`)
+              }
+            >
+              <GitBranch />{" "}
+              {inStudio ? "Open in Graph editor" : "Open in Agent Studio"}
             </DropdownMenuItem>
           )}
           <DropdownMenuItem
             onSelect={() =>
               duplicate.mutate(agent.id, {
-                onSuccess: (copy) => toast.success(`Duplicated as “${copy.name}”`),
+                onSuccess: (copy) =>
+                  toast.success(`Duplicated as “${copy.name}”`),
               })
             }
           >
@@ -112,25 +170,39 @@ export function AgentListPage({ kind }: { kind: AgentKind }) {
   const navigate = useNavigate();
   const fileInput = useRef<HTMLInputElement>(null);
 
-  /** Create ▾ → Import JSON: a graph agent exported from here or from Bolna becomes a new agent. */
+  /**
+   * Create ▾ → Import JSON: an agent JSON (this dashboard's or Bolna's export, or Bolna's API
+   * response) becomes a new agent. The Graph Agent page takes graph agents only.
+   */
   const importFile = async (file: File) => {
     try {
-      const payload = JSON.parse(await file.text()) as BolnaAgentPayload;
-      if (!payload?.agent_config) throw new Error("Not an agent JSON (missing agent_config)");
-      const isGraphJson =
-        payload.agent_config.agent_type === "graph_agent" ||
-        (payload.agent_config.tasks ?? []).some((t: { tools_config?: { llm_agent?: { agent_type?: string } } }) => t.tools_config?.llm_agent?.agent_type === "graph_agent");
-      if (!isGraphJson) throw new Error("This JSON is not a graph agent");
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        throw new Error("That file isn't valid JSON");
+      }
+      const payload = normalizeAgentJson(parsed);
+      const graphJson = isGraphPayload(payload);
+      if (kind === "graph" && !graphJson)
+        throw new Error(
+          "This JSON is not a graph agent. Import it from Agent Studio.",
+        );
       const agent = await importAgent.mutateAsync(payload);
       toast.success(`Imported ${agent.name}`);
-      navigate(agentPath(agent.id, "graph"));
+      navigate(
+        kind === "graph" ? agentPath(agent.id, "graph") : `/agents/${agent.id}`,
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not import");
     }
   };
 
   const filtered = useMemo(
-    () => (data ?? []).filter((a) => a.name.toLowerCase().includes(query.trim().toLowerCase())),
+    () =>
+      (data ?? []).filter((a) =>
+        a.name.toLowerCase().includes(query.trim().toLowerCase()),
+      ),
     [data, query],
   );
   const isGraph = kind === "graph";
@@ -139,42 +211,40 @@ export function AgentListPage({ kind }: { kind: AgentKind }) {
     <>
       <PageHeader
         title={isGraph ? "Graph Agents" : "Agent Studio"}
-        description={isGraph ? undefined : "All your voice agents, simple and graph. Configure, test and deploy."}
+        description={
+          isGraph
+            ? undefined
+            : "All your voice agents, simple and graph. Configure, test and deploy."
+        }
         actions={
-          isGraph ? (
-            <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button loading={importAgent.isPending}>
-                    <Plus /> Create <ChevronDown />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
-                    <LayoutTemplate /> From template
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => fileInput.current?.click()}>
-                    <FileJson /> Import JSON
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <input
-                ref={fileInput}
-                type="file"
-                accept="application/json,.json"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void importFile(f);
-                  e.target.value = "";
-                }}
-              />
-            </>
-          ) : (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus /> New agent
-            </Button>
-          )
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button loading={importAgent.isPending}>
+                  <Plus /> {isGraph ? "Create" : "New agent"} <ChevronDown />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
+                  <LayoutTemplate /> From template
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => fileInput.current?.click()}>
+                  <FileJson /> Import JSON
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <input
+              ref={fileInput}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void importFile(f);
+                e.target.value = "";
+              }}
+            />
+          </>
         }
       />
 
@@ -188,7 +258,8 @@ export function AgentListPage({ kind }: { kind: AgentKind }) {
         />
         {data && (
           <p className="text-sm text-muted-foreground">
-            Showing {filtered.length} of {data.length} {data.length === 1 ? "agent" : "agents"}
+            Showing {filtered.length} of {data.length}{" "}
+            {data.length === 1 ? "agent" : "agents"}
           </p>
         )}
       </div>
@@ -202,8 +273,18 @@ export function AgentListPage({ kind }: { kind: AgentKind }) {
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={isGraph ? GitBranch : Bot}
-          title={query ? "No agents match your search" : isGraph ? "No graph agents yet" : "No agents yet"}
-          description={query ? "Try a different name." : "Create your first agent from a template in under a minute."}
+          title={
+            query
+              ? "No agents match your search"
+              : isGraph
+                ? "No graph agents yet"
+                : "No agents yet"
+          }
+          description={
+            query
+              ? "Try a different name."
+              : "Create your first agent from a template in under a minute."
+          }
           action={
             !query && (
               <Button onClick={() => setCreateOpen(true)}>
@@ -215,19 +296,29 @@ export function AgentListPage({ kind }: { kind: AgentKind }) {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} onDelete={() => setToDelete(agent)} inStudio={!isGraph} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              onDelete={() => setToDelete(agent)}
+              inStudio={!isGraph}
+            />
           ))}
         </div>
       )}
 
-      <CreateAgentDialog open={createOpen} onOpenChange={setCreateOpen} kind={kind} />
+      <CreateAgentDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        kind={kind}
+      />
       <ConfirmDialog
         open={Boolean(toDelete)}
         onOpenChange={(o) => !o && setToDelete(null)}
         title="Delete agent?"
         description={
           <>
-            <strong className="text-heading">{toDelete?.name}</strong> will be deleted. Calls already made keep their history.
+            <strong className="text-heading">{toDelete?.name}</strong> will be
+            deleted. Calls already made keep their history.
           </>
         }
         loading={remove.isPending}

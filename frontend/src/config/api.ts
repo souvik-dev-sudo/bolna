@@ -5,5 +5,7 @@
  * Note: a page served over https (Firebase Hosting) may only call https addresses; browsers block
  * http calls from it ("mixed content"). Plain http works for a dashboard opened on http://localhost.
  */
-export const BOLNA_API_URL = "http://34.47.209.106:5001"; // bolna-app: agents, call history, login
-export const TELEPHONY_API_URL = "http://34.47.209.106:8002"; // plivo-app: placing calls
+// Caddy on the VM serves https for 34-47-209-106.sslip.io and forwards /bolna/* to bolna-app and
+// /telephony/* to plivo-app (/opt/caddy/Caddyfile on the VM).
+export const BOLNA_API_URL = "https://34-47-209-106.sslip.io/bolna"; // bolna-app: agents, call history, login
+export const TELEPHONY_API_URL = "https://34-47-209-106.sslip.io/telephony"; // plivo-app: placing calls

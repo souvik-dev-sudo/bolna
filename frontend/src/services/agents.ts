@@ -128,6 +128,35 @@ export async function duplicateAgent(id: string): Promise<AgentForm> {
   return postAgent(payload);
 }
 
+/** Fields Bolna's API returns next to the agent's settings; this server assigns its own. */
+const API_ONLY_FIELDS = ["id", "agent_id", "agent_status", "created_at", "updated_at", "agent_prompts"];
+
+/**
+ * An agent JSON in either shape, as { agent_config, agent_prompts }:
+ *   - an export ({ agent_config, agent_prompts }), from this dashboard or Bolna's "Export";
+ *   - Bolna's API response (GET api.bolna.ai/v2/agent/{id}), with the settings at the top level.
+ */
+export function normalizeAgentJson(raw: unknown): BolnaAgentPayload {
+  if (!raw || typeof raw !== "object") throw new Error("Not an agent JSON");
+  const json = raw as Json;
+  if (json.agent_config && typeof json.agent_config === "object") {
+    return { agent_config: json.agent_config, agent_prompts: json.agent_prompts ?? {} };
+  }
+  if (Array.isArray(json.tasks)) {
+    const config = Object.fromEntries(Object.entries(json).filter(([k]) => !API_ONLY_FIELDS.includes(k)));
+    return { agent_config: config, agent_prompts: json.agent_prompts ?? {} };
+  }
+  throw new Error("Not an agent JSON (no agent_config or tasks)");
+}
+
+export function isGraphPayload(payload: BolnaAgentPayload): boolean {
+  const config = payload.agent_config ?? {};
+  return (
+    config.agent_type === "graph_agent" ||
+    (config.tasks ?? []).some((t: Json) => t?.tools_config?.llm_agent?.agent_type === "graph_agent")
+  );
+}
+
 export async function importAgent(payload: BolnaAgentPayload): Promise<AgentForm> {
   return postAgent({ agent_config: payload.agent_config, agent_prompts: payload.agent_prompts ?? {} });
 }

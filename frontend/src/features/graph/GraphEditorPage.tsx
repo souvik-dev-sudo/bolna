@@ -293,7 +293,7 @@ function GraphCanvas() {
   const searchMatches = q ? graph.nodes.filter((n) => n.id.toLowerCase().includes(q)) : [];
 
   return (
-    <div className="flex h-[calc(100vh-56px)] flex-col lg:h-screen">
+    <div className="flex h-[calc(100vh-56px)] flex-col lg:h-[calc(100vh-64px)]">
       {/* Top bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-3 md:px-6">
         <div className="flex min-w-0 items-center gap-3">
