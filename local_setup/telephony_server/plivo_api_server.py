@@ -14,6 +14,7 @@ import redis.asyncio as redis
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 import plivo
+import dashboard_auth
 
 app = FastAPI()
 load_dotenv()
@@ -46,6 +47,17 @@ def populate_ngrok_tunnels():
 
 
 BOLNA_APP_URL = "http://bolna-app:5001"
+
+
+def bolna_headers():
+    """bolna-app's routes need the dashboard login; this app's own requests carry the internal token."""
+    return {dashboard_auth.INTERNAL_HEADER: dashboard_auth.internal_token()}
+
+
+def require_dashboard_login(request: Request):
+    """POST /call places real calls, so only a signed-in dashboard user may use it (TRACKER F7)."""
+    if not dashboard_auth.session_ok(request.cookies.get(dashboard_auth.COOKIE_NAME)):
+        raise HTTPException(status_code=401, detail="Sign in required")
 # A tracked call's reference: safe to put in URLs and in the Stream XML as is.
 REF_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 
@@ -74,7 +86,9 @@ def place_call(agent_id, recipient_phone_number, ref=None):
 @app.post("/call")
 async def make_call(request: Request):
     """Places a call: {agent_id, recipient_phone_number, user_data?}. user_data fills the prompt's
-    {variables}. Returns {ref, request_uuid}; GET bolna-app /calls/{ref} follows the call."""
+    {variables}. Returns {ref, request_uuid}; GET bolna-app /calls/{ref} follows the call.
+    Needs the dashboard login cookie."""
+    require_dashboard_login(request)
     try:
         call_details = await request.json()
     except Exception:
@@ -101,6 +115,7 @@ def place_tracked_call(agent_id, phone, user_data=None):
         registered = requests.put(
             f"{BOLNA_APP_URL}/calls/{ref}",
             json={"agent_id": agent_id, "phone": phone, "user_data": user_data or {}},
+            headers=bolna_headers(),
             timeout=5,
         )
         registered.raise_for_status()
@@ -123,6 +138,7 @@ def _report_hangup(ref, form):
         requests.post(
             f"{BOLNA_APP_URL}/calls/{ref}/hangup",
             json={"status": form.get("CallStatus"), "cause": form.get("HangupCause"), "call_uuid": form.get("CallUUID")},
+            headers=bolna_headers(),
             timeout=5,
         )
     except Exception as e:
@@ -322,7 +338,7 @@ async def test_call_page():
 async def test_call_agents(request: Request):
     await _check_pin(request)
     try:
-        agents = requests.get(BOLNA_AGENTS_URL, timeout=5).json().get("agents", [])
+        agents = requests.get(BOLNA_AGENTS_URL, headers=bolna_headers(), timeout=5).json().get("agents", [])
     except Exception as e:
         print(f"Exception occurred fetching agents: {e}")
         raise HTTPException(status_code=502, detail="Could not load agents")

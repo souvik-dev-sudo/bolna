@@ -17,6 +17,9 @@ echo "==> Writing .env and ngrok config from Secret Manager"
 umask 077
 GEMINI_API_KEY=$(secret gemini-api-key)
 PG_PASSWORD=$(secret postgres-password)
+# Required: the dashboard stays locked without them (set -e stops the deploy if a secret is missing)
+DASHBOARD_USERNAME=$(secret dashboard-username)
+DASHBOARD_PASSWORD=$(secret dashboard-password)
 cat > .env <<EOF
 OPENAI_API_KEY=$(secret openai-api-key)
 GEMINI_API_KEY=${GEMINI_API_KEY}
@@ -28,6 +31,8 @@ PLIVO_AUTH_ID=$(secret plivo-auth-id)
 PLIVO_AUTH_TOKEN=$(secret plivo-auth-token)
 PLIVO_PHONE_NUMBER=$(secret plivo-phone-number)
 TEST_CALL_PIN=$(secret test-call-pin 2>/dev/null || true)
+DASHBOARD_USERNAME=${DASHBOARD_USERNAME}
+DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
 CALL_TRANSFER_WEBHOOK_URL=http://plivo-app:8002/transfer_call
 RECORDINGS_BUCKET=${PROJECT_ID}-call-recordings
 GEMINI_USE_VERTEX=true

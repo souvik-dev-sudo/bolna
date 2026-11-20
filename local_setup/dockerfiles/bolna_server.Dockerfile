@@ -43,7 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     (echo "Failed to install bolna package. See error above." && exit 1)
 
 # Copy application files
-COPY local_setup/quickstart_server.py local_setup/database.py local_setup/call_results.py /app/
+COPY local_setup/quickstart_server.py local_setup/database.py local_setup/call_results.py local_setup/dashboard_auth.py /app/
 COPY local_setup/presets /app/presets
 
 EXPOSE 5001

@@ -12,7 +12,8 @@ import wave
 import traceback
 from datetime import datetime, timezone
 import aiohttp
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Header, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Header, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as redis
 from dotenv import load_dotenv
@@ -25,6 +26,7 @@ from pydantic import ValidationError
 from bolna.llms import LiteLLM
 from bolna.agent_manager.assistant_manager import AssistantManager
 import call_results
+import dashboard_auth
 import database
 
 load_dotenv()
@@ -70,9 +72,69 @@ def prerender_static_audio(agent_config):
 
 app = FastAPI()
 
+# The dashboard calls this app same-origin (through Vite or nginx), so no cross-origin request may
+# carry the login cookie.
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
 )
+
+#############################################################################################
+# Dashboard login (TRACKER F7, local_setup/dashboard_auth.py)
+#############################################################################################
+# Every HTTP route needs the login cookie or plivo-app's internal token, except /auth/*.
+# The call stream (/chat/v1/{agent_id}) is a websocket, which this HTTP middleware never sees:
+# Plivo connects to it directly.
+
+if not dashboard_auth.enabled():
+    logger.warning("DASHBOARD_USERNAME / DASHBOARD_PASSWORD not set: the dashboard API stays locked until they are")
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path.startswith("/auth/"):
+        return await call_next(request)
+    if dashboard_auth.session_ok(request.cookies.get(dashboard_auth.COOKIE_NAME)) or dashboard_auth.internal_ok(
+        request.headers.get(dashboard_auth.INTERNAL_HEADER)
+    ):
+        return await call_next(request)
+    return JSONResponse(status_code=401, content={"detail": "Sign in required"})
+
+
+class LoginPayload(BaseModel):
+    username: str = Field(..., max_length=200)
+    password: str = Field(..., max_length=200)
+
+
+@app.post("/auth/login")
+async def auth_login(payload: LoginPayload, request: Request, response: Response):
+    if not dashboard_auth.enabled():
+        raise HTTPException(
+            status_code=503, detail="Sign-in is not set up: DASHBOARD_USERNAME or DASHBOARD_PASSWORD is missing on the server"
+        )
+    if dashboard_auth.locked_out():
+        raise HTTPException(status_code=429, detail="Too many wrong passwords. Try again in 15 minutes.")
+    if not dashboard_auth.credentials_ok(payload.username, payload.password):
+        dashboard_auth.record_bad_password()
+        logger.warning("Dashboard sign-in: wrong username or password")
+        # One message for both, so it doesn't reveal which part was right.
+        raise HTTPException(status_code=401, detail="Wrong username or password")
+    response.set_cookie(value=dashboard_auth.new_session(), **dashboard_auth.cookie_options(dashboard_auth.is_https(request)))
+    return {"signed_in": True}
+
+
+@app.post("/auth/logout")
+async def auth_logout(request: Request, response: Response):
+    options = dashboard_auth.cookie_options(dashboard_auth.is_https(request))
+    response.delete_cookie(options["key"], path=options["path"], secure=options["secure"], httponly=True, samesite="lax")
+    return {"signed_in": False}
+
+
+@app.get("/auth/me")
+async def auth_me(request: Request):
+    return {
+        "signed_in": dashboard_auth.session_ok(request.cookies.get(dashboard_auth.COOKIE_NAME)),
+        "configured": dashboard_auth.enabled(),
+    }
 
 
 @app.on_event("startup")

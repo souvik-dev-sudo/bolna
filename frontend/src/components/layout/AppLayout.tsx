@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { ChevronsUpDown, LifeBuoy, Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { ChevronsUpDown, LifeBuoy, LogOut, Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { toast } from "sonner";
 import { Wordmark, BrandMark } from "@/components/brand/Wordmark";
 import { Avatar } from "@/components/ui/misc";
-import { Tooltip } from "@/components/ui/overlays";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Tooltip } from "@/components/ui/overlays";
+import { logout } from "@/services/auth";
 import { app } from "@/config/app";
 import { navigation } from "@/config/navigation";
 import { cn } from "@/lib/utils";
@@ -75,16 +78,42 @@ function SidebarNav({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?
 }
 
 function WorkspaceCard({ collapsed }: { collapsed: boolean }) {
-  if (collapsed) return <Avatar label="NN" className="mx-auto" />;
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const signOut = async () => {
+    try {
+      await logout();
+    } catch {
+      toast.error("Could not sign out. Check your connection and try again.");
+      return;
+    }
+    qc.clear();
+    navigate("/login", { replace: true });
+  };
   return (
-    <button className="flex w-full items-center gap-3 rounded-lg border bg-card px-3 py-2.5 text-left shadow-soft transition-colors hover:border-primary-border">
-      <Avatar label="NN" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold text-heading">{app.workspace.name}</span>
-        <span className="block truncate text-xs text-muted-foreground">{app.workspace.plan}</span>
-      </span>
-      <ChevronsUpDown className="h-4 w-4 text-placeholder" />
-    </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        {collapsed ? (
+          <button className="mx-auto rounded-full" aria-label="Account">
+            <Avatar label="NN" />
+          </button>
+        ) : (
+          <button className="flex w-full items-center gap-3 rounded-lg border bg-card px-3 py-2.5 text-left shadow-soft transition-colors hover:border-primary-border">
+            <Avatar label="NN" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-heading">{app.workspace.name}</span>
+              <span className="block truncate text-xs text-muted-foreground">{app.workspace.plan}</span>
+            </span>
+            <ChevronsUpDown className="h-4 w-4 text-placeholder" />
+          </button>
+        )}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="top" className="w-56">
+        <DropdownMenuItem onSelect={() => void signOut()}>
+          <LogOut /> Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
