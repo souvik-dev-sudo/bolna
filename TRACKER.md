@@ -73,7 +73,7 @@ Taken from https://nexaneura.com (`assets/css/styles.css`). Light theme only, li
 | F4 | Shared UI kit: input, textarea, select, combobox, switch, slider + number box, tabs, dialog, sheet, tooltip, table, toast, copy-chip | ✅ | P0 | **done** |
 | F5 | Agent-config typings + form↔JSON mapper (UI form ⇄ Bolna `agent_config` + `agent_prompts`) | ✅ | P0 | **done** |
 | F6 | Production serving: nginx serves `frontend/dist`, routes `/api/bolna/*` and `/api/telephony/*`; plivo routes stay reachable | 🟡 | P0 | todo |
-| F7 | Basic access gate (single password / PIN) before the dashboard is on a public URL | 🟡 Not in Bolna; small backend add | P0 | todo |
+| F7 | Basic access gate: one account (`DASHBOARD_USERNAME` + `DASHBOARD_PASSWORD`; username ignores case), signed HttpOnly session cookie (7 days), sign-in page (Username + Password) + Sign out. Enforced in bolna-app (every HTTP route except `/auth/*`; the `/chat/` call websocket stays open for Plivo) and plivo-app `POST /call`. plivo-app → bolna-app uses an internal token derived from the password. 5 wrong passwords → 15 min lockout. Unset password = locked. Prod: Secret Manager `bolna-dashboard-username` + `bolna-dashboard-password` (deploy stops without them) | 🟡 | P0 | **done** (verified in Docker 2026-11-21) |
 | F8 | Fix `GET/PUT/DELETE /agent/{id}` returning 500 instead of 404 | ✅ | P0 | **done** (GET/PUT/DELETE return 404; non-UUID ids rejected) |
 | F9 | Store `created_at` / `updated_at` / `agent_type` on agents (for "Updated 21 days ago" and the agent lists) | ✅ | P0 | **done** (created_at/updated_at in the Redis config; older agents fall back to prompt-file mtime) |
 
