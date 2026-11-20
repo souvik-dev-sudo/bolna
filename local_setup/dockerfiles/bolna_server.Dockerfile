@@ -32,7 +32,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     huggingface-hub \
     numpy \
     tqdm \
-    requests
+    requests \
+    asyncpg==0.30.0
 
 # Install the bolna package from this repo (build context is the repo root)
 COPY pyproject.toml requirements.txt README.md LICENSE /src/
@@ -42,7 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     (echo "Failed to install bolna package. See error above." && exit 1)
 
 # Copy application files
-COPY local_setup/quickstart_server.py /app/
+COPY local_setup/quickstart_server.py local_setup/database.py /app/
 COPY local_setup/presets /app/presets
 
 EXPOSE 5001

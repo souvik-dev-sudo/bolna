@@ -18,6 +18,7 @@ from bolna.helpers.logger_config import configure_logger
 from bolna.models import *
 from bolna.llms import LiteLLM
 from bolna.agent_manager.assistant_manager import AssistantManager
+import database
 
 load_dotenv()
 logger = configure_logger(__name__)
@@ -55,6 +56,35 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
+
+
+@app.on_event("startup")
+async def connect_database():
+    """Opens the Postgres pool early; a failure is only logged and retried on first use."""
+    if not database.is_configured():
+        logger.info("DATABASE_URL not set, running without Postgres")
+        return
+    try:
+        await database.get_pool()
+    except Exception as e:
+        logger.warning(f"Postgres not reachable at startup, will retry on first use: {type(e).__name__}: {e}")
+
+
+@app.on_event("shutdown")
+async def disconnect_database():
+    await database.close_pool()
+
+
+@app.get("/db/health")
+async def db_health():
+    """Test endpoint: confirms bolna-app can read from and write to Postgres."""
+    if not database.is_configured():
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not set")
+    try:
+        return await database.health()
+    except Exception as e:
+        logger.error(f"Postgres health check failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=503, detail=f"Database unreachable: {type(e).__name__}: {e}")
 
 
 class CreateAgentPayload(BaseModel):

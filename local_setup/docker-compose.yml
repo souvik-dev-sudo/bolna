@@ -23,6 +23,24 @@ services:
     ports:
       - "6379:6379"
 
+  # Postgres: app data such as call history (agents stay in Redis for now).
+  # bolna-app does not depend on it: it connects on first use, so the stack runs without it.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bolna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-bolna}
+    ports:
+      - "127.0.0.1:5432:5432"  # host access for local tools only, never public
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ngrok for local tunneling
   ngrok:
     image: ngrok/ngrok:latest
@@ -74,3 +92,6 @@ services:
     depends_on:
       - bolna-app
       - plivo-app
+
+volumes:
+  pgdata:
