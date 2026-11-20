@@ -14,6 +14,8 @@ locals {
     NGROK_AUTHTOKEN    = "${var.name_prefix}-ngrok-authtoken"
     TEST_CALL_PIN      = "${var.name_prefix}-test-call-pin" # optional; enables /test-call
     POSTGRES_PASSWORD  = "${var.name_prefix}-postgres-password"
+    DASHBOARD_USERNAME = "${var.name_prefix}-dashboard-username"
+    DASHBOARD_PASSWORD = "${var.name_prefix}-dashboard-password"
   }
 }
 
