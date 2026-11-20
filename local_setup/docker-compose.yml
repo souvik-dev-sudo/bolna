@@ -92,9 +92,8 @@ services:
     profiles: ["frontend"]
     working_dir: /app
     command: sh -c "npm install --no-audit --no-fund && npm run dev"
+    # Backend addresses (BOLNA_API_URL, TELEPHONY_API_URL) come from frontend/.env.
     environment:
-      BOLNA_API_URL: http://bolna-app:5001
-      TELEPHONY_API_URL: http://plivo-app:8002
       VITE_USE_POLLING: "true"
     volumes:
       - ../frontend:/app

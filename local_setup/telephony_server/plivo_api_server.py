@@ -12,12 +12,21 @@ from urllib.parse import parse_qs, quote, urlparse
 from dotenv import load_dotenv
 import redis.asyncio as redis
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 import plivo
 import dashboard_auth
 
 app = FastAPI()
 load_dotenv()
+# The dashboard (e.g. on Firebase Hosting) calls POST /call from the browser with a Bearer token.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=dashboard_auth.allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 port = 8002
 
 plivo_auth_id = os.getenv("PLIVO_AUTH_ID")
@@ -56,7 +65,7 @@ def bolna_headers():
 
 def require_dashboard_login(request: Request):
     """POST /call places real calls, so only a signed-in dashboard user may use it (TRACKER F7)."""
-    if not dashboard_auth.session_ok(request.cookies.get(dashboard_auth.COOKIE_NAME)):
+    if not dashboard_auth.request_session_ok(request):
         raise HTTPException(status_code=401, detail="Sign in required")
 # A tracked call's reference: safe to put in URLs and in the Stream XML as is.
 REF_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")

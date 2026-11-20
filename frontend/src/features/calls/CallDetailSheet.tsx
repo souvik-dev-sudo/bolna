@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as ReTooltip, XAxis, YAxis } from "recharts";
 import { Bot, FileText, Gauge, MessageSquareText, Star, User } from "lucide-react";
@@ -9,15 +9,37 @@ import { CopyChip, Skeleton, Tabs, TabsContent, TabsList, TabsTrigger } from "@/
 import { Sheet, SheetContent } from "@/components/ui/overlays";
 import { callProviders, hangupBy, terminationReasons } from "@/config/calls";
 import { useCall, useSetCallRating } from "@/hooks/queries";
+import { fetchBlobUrl } from "@/lib/api";
 import { formatDateTime, formatDuration, shortId } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { chart } from "@/theme/theme";
 import type { CallRecord } from "@/types/call";
 import { CallStatusBadge, CallTypeLabel } from "./CallStatusBadge";
 
-/** The call's recording, streamed from Plivo through bolna-app (seekable). */
+/** The call's recording from Plivo through bolna-app, fetched with the login token, then played. */
 function RecordingPlayer({ call }: { call: CallRecord }) {
   const [failed, setFailed] = useState(false);
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!call.recordingUrl) return;
+    let url: string | null = null;
+    let cancelled = false;
+    setSrc(null);
+    setFailed(false);
+    fetchBlobUrl(call.recordingUrl)
+      .then((u) => {
+        url = u;
+        if (cancelled) URL.revokeObjectURL(u);
+        else setSrc(u);
+      })
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [call.recordingUrl]);
+
   if (!call.recordingUrl || failed) {
     return (
       <div className="rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
@@ -25,9 +47,10 @@ function RecordingPlayer({ call }: { call: CallRecord }) {
       </div>
     );
   }
+  if (!src) return <Skeleton className="h-14 w-full rounded-lg" />;
   return (
     <div className="rounded-lg border bg-muted/40 px-3 py-2">
-      <audio key={call.id} controls preload="metadata" src={call.recordingUrl} onError={() => setFailed(true)} className="h-10 w-full">
+      <audio key={call.id} controls preload="metadata" src={src} onError={() => setFailed(true)} className="h-10 w-full">
         <track kind="captions" />
       </audio>
     </div>

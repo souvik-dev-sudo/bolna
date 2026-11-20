@@ -82,6 +82,32 @@ def session_ok(token):
     return hmac.compare_digest(signature, _sign("session", expires))
 
 
+def bearer_token(request):
+    header = request.headers.get("authorization", "")
+    return header[7:].strip() if header[:7].lower() == "bearer " else ""
+
+
+def request_session_ok(request):
+    """Signed in by the session cookie (dashboard served same-origin) or by
+    "Authorization: Bearer <token>" (dashboard on another site, e.g. Firebase Hosting)."""
+    return session_ok(request.cookies.get(COOKIE_NAME)) or session_ok(bearer_token(request))
+
+
+# Sites whose pages may call the APIs from the browser (CORS). DASHBOARD_ORIGINS in .env
+# (comma-separated) replaces this list.
+DEFAULT_ORIGINS = [
+    "https://nexaneura-voice-agent-studio.web.app",
+    "https://nexaneura-voice-agent-studio.firebaseapp.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+
+def allowed_origins():
+    configured = [o.strip().rstrip("/") for o in os.getenv("DASHBOARD_ORIGINS", "").split(",") if o.strip()]
+    return configured or DEFAULT_ORIGINS
+
+
 def internal_token():
     return _sign("internal", "plivo-app")
 

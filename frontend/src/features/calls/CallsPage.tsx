@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowUp,
@@ -28,7 +29,8 @@ import { callProviders, callStatuses, callTypes, hangupBy, terminationReasons, t
 import { useAgents, useCalls, useCallStats } from "@/hooks/queries";
 import { formatDateTime, formatDuration, formatNumber, relativeTime, shortId } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { csvUrl } from "@/services/calls";
+import { fetchBlobUrl } from "@/lib/api";
+import { csvPath } from "@/services/calls";
 import type { CallFilters } from "@/types/call";
 import { CallDetailSheet, Rating } from "./CallDetailSheet";
 import { CallStatusBadge, CallTypeLabel } from "./CallStatusBadge";
@@ -48,6 +50,7 @@ type SortField = NonNullable<CallFilters["sort"]>["field"];
 export function CallsPage() {
   const [params, setParams] = useSearchParams();
   const { data: agents = [] } = useAgents();
+  const [downloading, setDownloading] = useState(false);
 
   const get = (k: string) => params.get(k) ?? undefined;
   const range = get("range") ?? "30";
@@ -204,10 +207,27 @@ export function CallsPage() {
                 <RefreshCw className={cn(calls.isFetching && "animate-spin")} />
               </Button>
             </Tooltip>
-            <Button variant="secondary" asChild>
-              <a href={csvUrl(base)} download>
-                <Download /> Download Records
-              </a>
+            <Button
+              variant="secondary"
+              loading={downloading}
+              onClick={async () => {
+                // Fetched with the login token, then saved; a plain link couldn't send it.
+                setDownloading(true);
+                try {
+                  const url = await fetchBlobUrl(csvPath(base));
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `call-history-${new Date().toISOString().slice(0, 10)}.csv`;
+                  a.click();
+                  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : "Could not download records");
+                } finally {
+                  setDownloading(false);
+                }
+              }}
+            >
+              <Download /> Download Records
             </Button>
           </div>
         </div>

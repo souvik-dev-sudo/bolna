@@ -72,11 +72,6 @@ def prerender_static_audio(agent_config):
 
 app = FastAPI()
 
-# The dashboard calls this app same-origin (through Vite or nginx), so no cross-origin request may
-# carry the login cookie.
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"]
-)
 
 #############################################################################################
 # Dashboard login (TRACKER F7, local_setup/dashboard_auth.py)
@@ -93,11 +88,23 @@ if not dashboard_auth.enabled():
 async def require_login(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path.startswith("/auth/"):
         return await call_next(request)
-    if dashboard_auth.session_ok(request.cookies.get(dashboard_auth.COOKIE_NAME)) or dashboard_auth.internal_ok(
+    if dashboard_auth.request_session_ok(request) or dashboard_auth.internal_ok(
         request.headers.get(dashboard_auth.INTERNAL_HEADER)
     ):
         return await call_next(request)
     return JSONResponse(status_code=401, content={"detail": "Sign in required"})
+
+
+# Added after require_login so it wraps it: 401s also carry the CORS headers the browser needs to
+# read them. Only the dashboard's sites may call; the token travels in the Authorization header,
+# so no cross-site request carries cookies.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=dashboard_auth.allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 class LoginPayload(BaseModel):
@@ -118,8 +125,10 @@ async def auth_login(payload: LoginPayload, request: Request, response: Response
         logger.warning("Dashboard sign-in: wrong username or password")
         # One message for both, so it doesn't reveal which part was right.
         raise HTTPException(status_code=401, detail="Wrong username or password")
-    response.set_cookie(value=dashboard_auth.new_session(), **dashboard_auth.cookie_options(dashboard_auth.is_https(request)))
-    return {"signed_in": True}
+    token = dashboard_auth.new_session()
+    response.set_cookie(value=token, **dashboard_auth.cookie_options(dashboard_auth.is_https(request)))
+    # The token is also returned for dashboards on another site, which send it as "Authorization: Bearer".
+    return {"signed_in": True, "token": token}
 
 
 @app.post("/auth/logout")
@@ -132,7 +141,7 @@ async def auth_logout(request: Request, response: Response):
 @app.get("/auth/me")
 async def auth_me(request: Request):
     return {
-        "signed_in": dashboard_auth.session_ok(request.cookies.get(dashboard_auth.COOKIE_NAME)),
+        "signed_in": dashboard_auth.request_session_ok(request),
         "configured": dashboard_auth.enabled(),
     }
 

@@ -6,8 +6,8 @@
  *   callsPerDay  -> GET /api/bolna/call-history/timeseries?days=&agent_id=
  *   getCall      -> GET /api/bolna/call-history/{id}
  *   setRating    -> PUT /api/bolna/call-history/{id}/rating   { rating }
- *   csvUrl       ->     /api/bolna/call-history/export.csv?<same filters>  (a download link)
- *   recording    ->     /api/bolna/call-history/{id}/recording           (streams the Plivo recording)
+ *   csvPath      ->     /call-history/export.csv?<same filters>  (fetched with the token, then saved)
+ *   recording    ->     /call-history/{id}/recording           (fetched with the token, then played)
  */
 import type { CallStatus, CallType, HangupBy } from "@/config/calls";
 import { bolnaApi } from "@/lib/api";
@@ -68,7 +68,8 @@ function toCall(row: Json, agentName: string): CallRecord {
     durationSeconds: Number(row.conversation_time ?? 0),
     hangupBy: (row.hangup_by ?? undefined) as HangupBy | undefined,
     terminationReason: row.hangup_reason ?? undefined,
-    recordingUrl: completed && row.call_sid ? `/api/bolna/call-history/${encodeURIComponent(row.run_id)}/recording` : undefined,
+    // A bolna-app path; the player fetches it with the login token (lib/api fetchBlobUrl).
+    recordingUrl: completed && row.call_sid ? `/call-history/${encodeURIComponent(row.run_id)}/recording` : undefined,
     transcript: toTranscript(row.transcript),
     latencies: Array.isArray(row.latencies) ? row.latencies : [],
     summary: row.summary ?? undefined,
@@ -133,7 +134,7 @@ export async function setRating(id: string, rating: number | null): Promise<void
   await bolnaApi.put(`/call-history/${encodeURIComponent(id)}/rating`, { rating });
 }
 
-/** Download link for the CSV of every call matching the filters (all pages). */
-export function csvUrl(filters: Omit<CallFilters, "page" | "pageSize">): string {
-  return `/api/bolna/call-history/export.csv${query(filters)}`;
+/** bolna-app path of the CSV of every call matching the filters (all pages); fetch it with fetchBlobUrl. */
+export function csvPath(filters: Omit<CallFilters, "page" | "pageSize">): string {
+  return `/call-history/export.csv${query(filters)}`;
 }
