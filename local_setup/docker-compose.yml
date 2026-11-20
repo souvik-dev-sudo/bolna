@@ -84,6 +84,24 @@ services:
     env_file:
       - .env
 
+  # Frontend dev server (Vite) with hot reload on http://localhost:5173.
+  # Development only: starts only when named (`docker compose up -d frontend`).
+  # node_modules stays in a Docker volume, off the slow NTFS bind mount.
+  frontend:
+    image: node:22-alpine
+    profiles: ["frontend"]
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund && npm run dev"
+    environment:
+      BOLNA_API_URL: http://bolna-app:5001
+      TELEPHONY_API_URL: http://plivo-app:8002
+      VITE_USE_POLLING: "true"
+    volumes:
+      - ../frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+
   # nginx reverse proxy: routes the single ngrok URL by path
   proxy:
     image: nginx:alpine
@@ -95,3 +113,4 @@ services:
 
 volumes:
   pgdata:
+  frontend_node_modules:
