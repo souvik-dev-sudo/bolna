@@ -1,5 +1,5 @@
 # Copy to terraform.tfvars (git-ignored) and adjust.
-project_id  = "bolna-voice-uat"
+project_id  = "bolna-voice-uat-2"
 region      = "asia-south1"
 zone        = "asia-south1-a"
 github_repo = "souvik-dev-sudo/bolna"

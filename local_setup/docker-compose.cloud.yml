@@ -17,6 +17,11 @@ services:
     volumes:
       - /mnt/redis-data/redis:/data
 
+  postgres:
+    restart: unless-stopped
+    volumes:
+      - /mnt/redis-data/postgres:/var/lib/postgresql/data
+
   proxy:
     restart: unless-stopped
 
