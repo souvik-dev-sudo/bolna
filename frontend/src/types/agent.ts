@@ -1,4 +1,3 @@
-import type { CallStatus } from "@/config/calls";
 import type { ToolKind } from "@/config/tools";
 
 /** A per-language text, e.g. { en: "Hello", hi: "नमस्ते" }. */
@@ -87,19 +86,16 @@ export interface AgentForm {
   // Languages
   defaultLanguage: string;
   languages: LanguageSettings[];
-  languageSwitchMode: "auto" | "requested" | "never";
+  /** "auto": the default language listens in Sarvam auto-detect, so any language reaches the LLM;
+   *  "requested": fixed language, switch only through the switch_language tool. */
+  languageSwitchMode: "auto" | "requested";
 
   // Calling
   calling: {
     telephonyProvider: string;
-    ambientNoise: string;
-    noiseCancellation: boolean;
     voicemailDetection: boolean;
     voicemailSeconds: number;
     dtmf: boolean;
-    inbound: { enabled: boolean; number: string };
-    /** Outbound calls only inside these hours (UI only until campaigns exist). */
-    callingHours: { enabled: boolean; start: string; end: string; days: string[]; timezone: string };
   };
 
   // Engine
@@ -109,6 +105,7 @@ export interface AgentForm {
     userOnline: { enabled: boolean; afterSeconds: number; message: Localized };
     finalMessage: Localized;
     finalMessageInterruptible: boolean;
+    /** Off is stored as hangup_after_silence: 0 (the engine skips the check at 0). */
     hangupOnSilence: { enabled: boolean; seconds: number };
     callTimeoutSeconds: number;
   };
@@ -116,7 +113,9 @@ export interface AgentForm {
   tools: ToolConfig[];
 
   // Post-call
-  webhook: { url: string; headersEnabled: boolean; headers: { key: string; value: string }[]; statuses: CallStatus[] };
+  /** agent_config.webhook_url / webhook_headers; bolna-app POSTs the call result after every call. */
+  webhook: { url: string; headersEnabled: boolean; headers: { key: string; value: string }[] };
+  /** Follow-up tasks: summarization, and extraction with {name: description} as its schema. */
   extractions: { summary: boolean; categories: ExtractionCategory[] };
 
   graph?: GraphDefinition;
@@ -138,5 +137,6 @@ export interface AgentSummary {
 /** Bolna's stored shape: POST /agent body. Typed loosely; agentMapper is the only reader. */
 export interface BolnaAgentPayload {
   agent_config: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  agent_prompts: Record<string, Record<string, string>>;
+  /** {task_1: {system_prompt: "...", multilingual_prompts?: {lang: "..."}}} */
+  agent_prompts: Record<string, Record<string, string | Record<string, string>>>;
 }

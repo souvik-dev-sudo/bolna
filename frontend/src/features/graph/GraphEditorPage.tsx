@@ -21,8 +21,9 @@ import {
   Download,
   LayoutGrid,
   Maximize,
+  Maximize2,
   MessageSquareQuote,
-  PanelRightClose,
+  Minimize2,
   PanelRightOpen,
   Plus,
   Redo2,
@@ -32,6 +33,8 @@ import {
   Split,
   Undo2,
   Upload,
+  WandSparkles,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -39,12 +42,13 @@ import { toast } from "sonner";
 import { EmptyState } from "@/components/EmptyState";
 import { Breadcrumbs } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, Textarea } from "@/components/ui/input";
 import { CopyChip, Skeleton } from "@/components/ui/misc";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   Popover,
   PopoverContent,
@@ -54,9 +58,9 @@ import {
 import { AgentJsonDialog } from "@/features/agents/editor/AgentJsonDialog";
 import { AgentDraftProvider, useAgentDraftState, useDraft } from "@/features/agents/editor/useAgentDraft";
 import { fromBolna } from "@/lib/agentMapper";
-import { downloadText, relativeTime, shortId } from "@/lib/format";
+import { downloadText, shortDate, shortId } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { getAgentJson } from "@/services/agents";
+import { aiEditGraph, getAgentJson } from "@/services/agents";
 import { graphCanvas, graphNodes } from "@/theme/theme";
 import type { GraphDefinition, GraphNodeType } from "@/types/agent";
 import { GraphInspector } from "./GraphInspector";
@@ -84,6 +88,9 @@ function GraphCanvas() {
   const flow = useReactFlow();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState("setup");
+  const [wandOpen, setWandOpen] = useState(false);
+  const [wandText, setWandText] = useState("");
+  const [wandBusy, setWandBusy] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [inspectorWide, setInspectorWide] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
@@ -194,7 +201,7 @@ function GraphCanvas() {
         n?.edges.push({ id: `${c.source}->${c.target}-${Date.now()}`, to: c.target!, condition: "", label: "New condition", unconditional: false });
       });
       setSelectedId(c.source);
-      setInspectorTab("node");
+      setInspectorOpen(true);
       toast.success(`Connected ${c.source} → ${c.target}. Describe the condition in the inspector.`);
     },
     [mutateGraph],
@@ -207,7 +214,6 @@ function GraphCanvas() {
       g.nodes.push({ id, type, prompt: "", staticMessage: {}, examples: {}, edges: [], position: { x: center.x - 130, y: center.y - 60 } }),
     );
     setSelectedId(id);
-    setInspectorTab("node");
     setInspectorOpen(true);
   };
 
@@ -220,6 +226,25 @@ function GraphCanvas() {
     toast.success(`Deleted ${id}`);
   };
 
+  /** Magic wand: the edited graph replaces the canvas as one undoable change; nothing is saved. */
+  const runWand = async () => {
+    if (!wandText.trim()) return;
+    setWandBusy(true);
+    try {
+      const { graph: edited } = await aiEditGraph(draft, wandText.trim());
+      mutateGraph((g) => Object.assign(g, edited));
+      setSelectedId(null);
+      setWandOpen(false);
+      setWandText("");
+      toast.success(`Graph updated (${edited.nodes.length} nodes). Review it, then save.`);
+      setTimeout(() => flow.fitView({ padding: 0.15, duration: 400 }), 80);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "AI Edit failed");
+    } finally {
+      setWandBusy(false);
+    }
+  };
+
   const relayout = () => {
     const pos = autoLayout(graph);
     mutateGraph((g) => g.nodes.forEach((n) => (n.position = pos[n.id])));
@@ -228,7 +253,6 @@ function GraphCanvas() {
 
   const focusNode = (id: string) => {
     setSelectedId(id);
-    setInspectorTab("node");
     setInspectorOpen(true);
     flow.fitView({ nodes: [{ id }], duration: 500, maxZoom: 1.1, padding: 0.6 });
   };
@@ -273,26 +297,23 @@ function GraphCanvas() {
       {/* Top bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-3 md:px-6">
         <div className="flex min-w-0 items-center gap-3">
-          <Breadcrumbs items={[{ label: "Graph agents", to: "/graphs" }, { label: draft.name }]} />
+          <Breadcrumbs items={[{ label: "Graph Agents", to: "/graphs" }, { label: draft.name }]} />
           <CopyChip value={draft.id} display={shortId(draft.id)} />
           <span className="hidden text-xs text-muted-foreground sm:inline">
             {dirty ? (
               <span className="flex items-center gap-1.5 text-warning">
-                <span className="h-1.5 w-1.5 rounded-full bg-warning" /> Unsaved · saved {relativeTime(saved.updatedAt)}
+                <span className="h-1.5 w-1.5 rounded-full bg-warning" /> Unsaved · saved {shortDate(saved.updatedAt)}
               </span>
             ) : (
-              `Saved ${relativeTime(saved.updatedAt)}`
+              `Saved ${shortDate(saved.updatedAt)}`
             )}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={() => setInspectorOpen((o) => !o)} className="hidden md:inline-flex">
-            {inspectorOpen ? <PanelRightClose /> : <PanelRightOpen />} Inspector
+        {!inspectorOpen && (
+          <Button variant="secondary" onClick={() => setInspectorOpen(true)} className="hidden md:inline-flex">
+            <PanelRightOpen /> Inspector
           </Button>
-          <Button onClick={() => void save()} loading={saving} disabled={!dirty}>
-            <Save /> Save
-          </Button>
-        </div>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -311,12 +332,11 @@ function GraphCanvas() {
             }
             onNodeClick={(_, node) => {
               setSelectedId(node.id);
-              setInspectorTab("node");
               setInspectorOpen(true);
             }}
             onEdgeClick={(_, edge) => {
               setSelectedId(edge.source);
-              setInspectorTab("node");
+              setInspectorOpen(true);
             }}
             onPaneClick={() => setSelectedId(null)}
             onConnect={onConnect}
@@ -359,6 +379,10 @@ function GraphCanvas() {
                 <DropdownMenuItem onSelect={() => addNode("router")}>
                   <Split /> Router
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={relayout}>
+                  <LayoutGrid /> Auto-arrange
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Divider />
@@ -371,9 +395,36 @@ function GraphCanvas() {
             >
               <Download />
             </ToolButton>
-            <ToolButton label="Auto-arrange" onClick={relayout}>
-              <LayoutGrid />
-            </ToolButton>
+            <Popover open={wandOpen} onOpenChange={(o) => !wandBusy && setWandOpen(o)}>
+              <PopoverTrigger asChild>
+                <span>
+                  <ToolButton label="AI edit" active={wandOpen}>
+                    <WandSparkles />
+                  </ToolButton>
+                </span>
+              </PopoverTrigger>
+              <PopoverContent className="w-96 p-3">
+                <p className="mb-1 text-sm font-semibold text-heading">AI edit</p>
+                <p className="mb-2 text-xs text-muted-foreground">Describe the change. The graph updates here; review it, then save.</p>
+                <Textarea
+                  autoFocus
+                  rows={4}
+                  value={wandText}
+                  disabled={wandBusy}
+                  onChange={(e) => setWandText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void runWand();
+                  }}
+                  placeholder="e.g. Add a node that asks for the caller's email before Thank_you"
+                />
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">{wandBusy ? "Editing… large graphs take up to a minute." : ""}</span>
+                  <Button size="sm" onClick={() => void runWand()} loading={wandBusy} disabled={!wandText.trim()}>
+                    <Sparkles /> Apply
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
             <Divider />
             <ToolButton label="Undo (Ctrl+Z)" onClick={undo} disabled={past.current.length === 0}>
               <Undo2 />
@@ -443,6 +494,9 @@ function GraphCanvas() {
                 </ul>
               </PopoverContent>
             </Popover>
+            <ToolButton label={dirty ? "Save (Ctrl+S)" : "Saved"} onClick={() => void save()} disabled={!dirty || saving} active={dirty}>
+              <Save className={cn(saving && "animate-pulse")} />
+            </ToolButton>
             <AgentJsonDialog open={jsonOpen} onOpenChange={setJsonOpen} agent={draft} />
             <input
               ref={fileInput}
@@ -472,17 +526,21 @@ function GraphCanvas() {
         {/* Inspector */}
         {inspectorOpen && (
           <aside className={cn("hidden shrink-0 flex-col border-l bg-card md:flex", inspectorWide ? "w-[640px]" : "w-[420px]")}>
-            <div className="flex items-center justify-between border-b px-4 py-2">
-              <span className="text-sm font-semibold text-heading">Inspector</span>
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <span className="text-base font-semibold text-heading">Inspector</span>
               <div className="flex items-center gap-1">
-                <ToolButton label={inspectorWide ? "Narrow" : "Widen"} onClick={() => setInspectorWide((w) => !w)}>
-                  {inspectorWide ? <PanelRightClose /> : <PanelRightOpen />}
+                <ToolButton label={inspectorWide ? "Collapse" : "Expand"} onClick={() => setInspectorWide((w) => !w)}>
+                  {inspectorWide ? <Minimize2 /> : <Maximize2 />}
+                </ToolButton>
+                <ToolButton label="Close" onClick={() => setInspectorOpen(false)}>
+                  <X />
                 </ToolButton>
               </div>
             </div>
             <div className="min-h-0 flex-1">
               <GraphInspector
                 selectedId={selectedId}
+                onCloseNode={() => setSelectedId(null)}
                 issues={issues}
                 mutateGraph={mutateGraph}
                 onDeleteNode={deleteNode}

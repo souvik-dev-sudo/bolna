@@ -63,12 +63,9 @@ function CallsPerDayChart() {
 const outcomeOrder: CallStatus[] = ["completed", "no-answer", "busy", "failed", "canceled"];
 
 function Outcomes() {
-  const { data, isLoading } = useCalls({ page: 1, pageSize: 1000, from: new Date(Date.now() - 30 * 86_400_000).toISOString() });
-  const counts = useMemo(() => {
-    const m = new Map<CallStatus, number>();
-    data?.items.forEach((c) => m.set(c.status, (m.get(c.status) ?? 0) + 1));
-    return m;
-  }, [data]);
+  const monthAgo = useMemo(() => new Date(Date.now() - 30 * 86_400_000).toISOString(), []);
+  const { data, isLoading } = useCallStats({ from: monthAgo });
+  const counts = useMemo(() => new Map(Object.entries(data?.byStatus ?? {}) as [CallStatus, number][]), [data]);
   if (isLoading || !data) return <Skeleton className="h-48 w-full" />;
   const total = data.total || 1;
   return (

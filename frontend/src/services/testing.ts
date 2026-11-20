@@ -1,45 +1,73 @@
 /**
- * Test-call service. Mock implementation.
+ * Test calls from the dashboard.
  *
- * Backend integration:
- *   placeTestCall  -> POST /api/telephony/call  { agent_id, recipient_phone_number }  (returns call id, tracker A9.2)
- *   web call       -> WS   /api/bolna/chat/v1/web/{agent_id}                          (tracker A9.3)
- *   chat           -> WS   /api/bolna/chat/v1/text/{agent_id}                         (tracker A9.4)
+ *   placeTestCall  -> POST /api/telephony/call   { agent_id, recipient_phone_number, user_data }  -> { ref }
+ *   getTrackedCall -> GET  /api/bolna/calls/{ref}  state + the stored result once completed
+ *
+ * The ref follows the call: plivo-app registers it with bolna-app, the Plivo stream carries it to
+ * the agent (whose prompt gets user_data as its {variables}), and the result row is stored with it.
+ * Web call (A9.3) and Chat (A9.4) are skipped for now.
  */
+import { bolnaApi, telephonyApi } from "@/lib/api";
+import { extractVariables } from "@/lib/format";
 import type { AgentForm } from "@/types/agent";
-import { delay, newId } from "./mock";
 
-export async function placeTestCall(_agentId: string, phone: string): Promise<{ callId: string; phone: string }> {
-  await delay(900);
-  if (!/^\+?\d{10,15}$/.test(phone.replace(/[\s-]/g, ""))) {
-    throw new Error("Enter the number with country code, e.g. +91 98765 43210");
-  }
-  return { callId: newId(), phone };
+export type TrackedCallState = "ringing" | "live" | "processing" | "completed" | "busy" | "no-answer" | "timeout" | "failed" | "canceled" | "cancel";
+
+export interface TrackedCallResult {
+  run_id: string;
+  call_sid: string | null;
+  conversation_time: number | null;
+  transcript: { role: "user" | "assistant"; content: string }[];
+  summary: string | null;
+  extracted_data: Record<string, unknown> | null;
+  hangup_reason: string | null;
+  recording_url: string | null;
+  webhook_url: string | null;
+  webhook_status: number | null;
+  webhook_error: string | null;
 }
 
-const cannedReplies = [
-  "Sure, I can help with that. Could you tell me your full name?",
-  "Thank you. I can see your appointment details. Would you like to reschedule?",
-  "We have slots on Saturday at 10:30 AM or Monday at 4 PM. Which works better?",
-  "Done! You'll receive an SMS confirmation shortly. Is there anything else?",
-  "Thank you for your time. Have a great day!",
-];
-
-/** Simulates the agent replying to a chat message. */
-export async function sendChatMessage(agent: AgentForm, turn: number): Promise<string> {
-  await delay(700 + Math.random() * 600);
-  if (turn === 0) return agent.welcomeMessage[agent.defaultLanguage] || "Hello! How can I help you today?";
-  return cannedReplies[Math.min(turn - 1, cannedReplies.length - 1)];
+export interface TrackedCall {
+  ref: string;
+  agent_id: string;
+  phone: string | null;
+  state: TrackedCallState;
+  created_at: string;
+  started_at?: string;
+  ended_at?: string;
+  hangup_cause?: string;
+  error?: string;
+  result: TrackedCallResult | null;
 }
 
-/** Lines the simulated web call plays, alternating agent/user. */
-export function webCallScript(agent: AgentForm) {
-  const welcome = agent.welcomeMessage[agent.defaultLanguage] || "Hello! How can I help you today?";
-  return [
-    { role: "agent" as const, text: welcome },
-    { role: "user" as const, text: "Hi, I missed my appointment last week." },
-    { role: "agent" as const, text: "No problem. Would you like me to book a new slot for you this week?" },
-    { role: "user" as const, text: "Yes, Saturday morning if possible." },
-    { role: "agent" as const, text: "Saturday 10:30 AM is available. Shall I confirm it?" },
+/** States after which nothing changes any more. */
+export const finalStates: TrackedCallState[] = ["completed", "busy", "no-answer", "timeout", "failed", "canceled", "cancel"];
+
+export async function placeTestCall(agentId: string, phone: string, userData: Record<string, string>): Promise<{ ref: string }> {
+  const digits = phone.replace(/[\s()+-]/g, "");
+  if (!/^\d{10,15}$/.test(digits)) throw new Error("Enter the number with country code, e.g. +91 98765 43210");
+  return telephonyApi.post("/call", { agent_id: agentId, recipient_phone_number: digits, user_data: userData });
+}
+
+export async function getTrackedCall(ref: string): Promise<TrackedCall> {
+  return bolnaApi.get(`/calls/${encodeURIComponent(ref)}`);
+}
+
+/** Identifiers the server fills itself; never asked for. */
+const SERVER_VARIABLES = new Set(["call_sid", "stream_sid"]);
+
+/** The {variables} the call's texts use: welcome, prompts, final and user-online messages, graph nodes. */
+export function agentVariables(agent: AgentForm): string[] {
+  const texts = [
+    ...Object.values(agent.welcomeMessage),
+    ...Object.values(agent.prompts),
+    ...Object.values(agent.engine.finalMessage),
+    ...Object.values(agent.engine.userOnline.message),
   ];
+  if (agent.graph) {
+    texts.push(agent.graph.agentInformation, agent.graph.routingInstructions);
+    for (const node of agent.graph.nodes) texts.push(node.prompt, ...Object.values(node.staticMessage));
+  }
+  return extractVariables(texts.filter(Boolean).join("\n")).filter((v) => !SERVER_VARIABLES.has(v));
 }

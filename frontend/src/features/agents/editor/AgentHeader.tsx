@@ -10,7 +10,7 @@ function StackChips() {
   const { draft } = useDraft();
   const lang = draft.languages.find((l) => l.code === draft.defaultLanguage) ?? draft.languages[0];
   const chips = [
-    { label: "Speech-to-text", provider: lang.transcriber.provider, value: lang.transcriber.model },
+    { label: "Transcriber", provider: lang.transcriber.provider, value: lang.transcriber.model },
     { label: "LLM", provider: draft.llm.provider, value: draft.llm.model },
     { label: "Voice", provider: lang.voice.provider, value: lang.voice.model },
     { label: "Telephony", provider: draft.calling.telephonyProvider, value: draft.calling.telephonyProvider },

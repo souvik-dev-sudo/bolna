@@ -45,42 +45,88 @@ def populate_ngrok_tunnels():
         print(f"Error: Unable to fetch data. Status code: {response.status_code}")
 
 
-def place_call(agent_id, recipient_phone_number):
+BOLNA_APP_URL = "http://bolna-app:5001"
+# A tracked call's reference: safe to put in URLs and in the Stream XML as is.
+REF_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+
+
+def place_call(agent_id, recipient_phone_number, ref=None):
+    """Places the call; returns Plivo's request_uuid. With a ref, the answer and hangup callbacks
+    carry it so bolna-app can track the call (see /calls/{ref} in quickstart_server)."""
     telephony_host, bolna_host = populate_ngrok_tunnels()
 
     print(f"telephony_host: {telephony_host}")
     print(f"bolna_host: {bolna_host}")
 
+    tracking = f"&ref={ref}" if ref else ""
     # adding hangup_url since plivo opens a 2nd websocket once the call is cut.
     # https://github.com/bolna-ai/bolna/issues/148#issuecomment-2127980509
-    plivo_client.calls.create(
+    response = plivo_client.calls.create(
         from_=plivo_phone_number,
         to_=recipient_phone_number,
-        answer_url=f"{telephony_host}/plivo_connect?bolna_host={bolna_host}&agent_id={agent_id}",
-        hangup_url=f"{telephony_host}/plivo_hangup_callback",
+        answer_url=f"{telephony_host}/plivo_connect?bolna_host={bolna_host}&agent_id={agent_id}{tracking}",
+        hangup_url=f"{telephony_host}/plivo_hangup_callback" + (f"?ref={ref}" if ref else ""),
         answer_method="POST",
     )
+    return getattr(response, "request_uuid", None)
 
 
 @app.post("/call")
 async def make_call(request: Request):
+    """Places a call: {agent_id, recipient_phone_number, user_data?}. user_data fills the prompt's
+    {variables}. Returns {ref, request_uuid}; GET bolna-app /calls/{ref} follows the call."""
     try:
         call_details = await request.json()
-        agent_id = call_details.get("agent_id", None)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Send a JSON body")
+    agent_id = str(call_details.get("agent_id") or "").strip()
+    phone = re.sub(r"[\s+\-()]", "", str(call_details.get("recipient_phone_number") or ""))
+    user_data = call_details.get("user_data") or {}
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="Agent not provided")
+    if not re.fullmatch(r"\d{10,15}", phone):
+        raise HTTPException(status_code=400, detail="Enter the number with country code, e.g. +91 98765 43210")
+    if not isinstance(user_data, dict):
+        raise HTTPException(status_code=400, detail="user_data must be an object")
 
-        if not agent_id:
-            raise HTTPException(status_code=404, detail="Agent not provided")
+    ref, request_uuid = place_tracked_call(agent_id, phone, user_data)
+    return JSONResponse({"ref": ref, "request_uuid": request_uuid, "phone": phone})
 
-        if not call_details or "recipient_phone_number" not in call_details:
-            raise HTTPException(status_code=404, detail="Recipient phone number not provided")
 
-        place_call(agent_id, call_details.get("recipient_phone_number"))
-
-        return PlainTextResponse("done", status_code=200)
-
+def place_tracked_call(agent_id, phone, user_data=None):
+    """Registers the call with bolna-app (so it is followed and appears in Call History), then
+    places it. Returns (ref, request_uuid); raises HTTPException with a readable reason."""
+    ref = str(uuid.uuid4())
+    try:
+        registered = requests.put(
+            f"{BOLNA_APP_URL}/calls/{ref}",
+            json={"agent_id": agent_id, "phone": phone, "user_data": user_data or {}},
+            timeout=5,
+        )
+        registered.raise_for_status()
     except Exception as e:
-        print(f"Exception occurred in make_call: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        print(f"Exception occurred registering call {ref} with bolna-app: {e}")
+        raise HTTPException(status_code=502, detail="Could not reach bolna-app to set up the call")
+
+    try:
+        request_uuid = place_call(agent_id, phone, ref)
+    except Exception as e:
+        print(f"Exception occurred placing call {ref}: {e}")
+        _report_hangup(ref, {"CallStatus": "failed", "HangupCause": str(e)[:200]})
+        raise HTTPException(status_code=502, detail=f"Plivo could not place the call: {str(e)[:200]}")
+    return ref, request_uuid
+
+
+def _report_hangup(ref, form):
+    """Tells bolna-app how a tracked call ended (it only uses this for calls the agent never got)."""
+    try:
+        requests.post(
+            f"{BOLNA_APP_URL}/calls/{ref}/hangup",
+            json={"status": form.get("CallStatus"), "cause": form.get("HangupCause"), "call_uuid": form.get("CallUUID")},
+            timeout=5,
+        )
+    except Exception as e:
+        print(f"Exception occurred reporting hangup for call {ref}: {e}")
 
 
 async def _form(request: Request):
@@ -89,11 +135,15 @@ async def _form(request: Request):
 
 
 @app.post("/plivo_connect")
-async def plivo_connect(request: Request, bolna_host: str = Query(...), agent_id: str = Query(...)):
+async def plivo_connect(
+    request: Request, bolna_host: str = Query(...), agent_id: str = Query(...), ref: str = Query(None)
+):
     try:
         form = await _form(request)
-        print(f"plivo_connect CallUUID={form.get('CallUUID')} agent_id={agent_id}")
+        print(f"plivo_connect CallUUID={form.get('CallUUID')} agent_id={agent_id} ref={ref}")
         bolna_websocket_url = f"{bolna_host}/chat/v1/{agent_id}"
+        if ref and REF_RE.match(ref):
+            bolna_websocket_url += f"?ref={ref}"
 
         # Records both legs in the background; the call goes on to the Stream at once. A failed
         # tunnel lookup only loses the recording, not the call.
@@ -121,8 +171,11 @@ async def plivo_connect(request: Request, bolna_host: str = Query(...), agent_id
 
 
 @app.post("/plivo_hangup_callback")
-async def plivo_hangup_callback(request: Request):
-    # add any post call hangup processing
+async def plivo_hangup_callback(request: Request, ref: str = Query(None)):
+    if ref and REF_RE.match(ref):
+        form = await _form(request)
+        print(f"plivo_hangup_callback ref={ref} CallStatus={form.get('CallStatus')} HangupCause={form.get('HangupCause')}")
+        _report_hangup(ref, form)
     return PlainTextResponse("", status_code=200)
 
 
@@ -293,11 +346,6 @@ async def test_call(request: Request):
     if len(recent_calls) >= MAX_CALLS:
         raise HTTPException(status_code=429, detail="Too many test calls. Try again in a few minutes.")
 
-    try:
-        place_call(agent_id, phone)
-    except Exception as e:
-        print(f"Exception occurred in test_call: {e}")
-        raise HTTPException(status_code=500, detail="Could not place the call")
-
+    place_tracked_call(agent_id, phone)
     recent_calls.append(time.time())
     return JSONResponse({"status": "calling", "phone": phone})

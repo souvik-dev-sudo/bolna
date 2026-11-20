@@ -1,4 +1,4 @@
-import { BookOpenText, BrainCircuit, Check, ChevronsUpDown, SlidersHorizontal, X } from "lucide-react";
+import { BrainCircuit, Check, ChevronsUpDown, SlidersHorizontal, X } from "lucide-react";
 import { Field, PendingNote, SectionCard, SliderField } from "@/components/form/fields";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +27,8 @@ export function modelOptions(models: { id: string; label: string; note?: string 
   return models.map((m) => ({ value: m.id, label: m.label, hint: m.note }));
 }
 
-function KnowledgeBasePicker() {
+/** Not shown yet (A3.3 skipped until our RAG server exists, tracker §5). */
+export function KnowledgeBasePicker() {
   const { draft, patch } = useDraft();
   const { data: kbs = [] } = useKnowledgeBases();
   const selected = kbs.filter((k) => draft.knowledgeBaseIds.includes(k.id));
@@ -83,15 +84,17 @@ function KnowledgeBasePicker() {
 export function IntelligenceSection() {
   const { draft, patch } = useDraft();
   const provider = findLlmProvider(draft.llm.provider);
+  // Bolna's Provider select shows the engine's provider id ("openai", "google").
+  const llmProviderList = llmProviders.map((p) => ({ ...p, label: p.id }));
 
   return (
     <div className="flex flex-col gap-5">
-      <SectionCard icon={BrainCircuit} title="Language model" description="The model that decides what the agent says.">
+      <SectionCard icon={BrainCircuit} title="Choose LLM model" info="The model that decides what the agent says.">
         <div className="grid gap-4 @xl:grid-cols-2">
           <Field label="Provider">
             <Select
               value={draft.llm.provider}
-              options={providerOptions(llmProviders)}
+              options={providerOptions(llmProviderList)}
               onValueChange={(v) =>
                 patch((d) => {
                   d.llm.provider = v;
@@ -110,10 +113,10 @@ export function IntelligenceSection() {
         </div>
       </SectionCard>
 
-      <SectionCard icon={SlidersHorizontal} title="Model parameters">
+      <SectionCard icon={SlidersHorizontal} title="Model Parameters">
         <div className="grid gap-6 @xl:grid-cols-2">
           <SliderField
-            label="Max tokens per reply"
+            label="Tokens generated on each LLM output"
             info="Caps reply length. Voice replies should be short; 150–300 is typical."
             value={draft.llm.maxTokens}
             onChange={(v) => patch((d) => void (d.llm.maxTokens = v))}
@@ -128,10 +131,8 @@ export function IntelligenceSection() {
           />
         </div>
       </SectionCard>
-
-      <SectionCard icon={BookOpenText} title="Knowledge base" description="Documents the agent can look up during a call.">
-        <KnowledgeBasePicker />
-      </SectionCard>
+      {/* Knowledge Base (A3.3) is out of scope for now: it needs our own RAG server (tracker §5).
+          KnowledgeBasePicker stays below for when that lands. */}
     </div>
   );
 }

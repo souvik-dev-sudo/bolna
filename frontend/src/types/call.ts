@@ -3,8 +3,8 @@ import type { CallStatus, CallType, HangupBy } from "@/config/calls";
 export interface TranscriptTurn {
   role: "agent" | "user" | "system";
   text: string;
-  /** Seconds from call start. */
-  at: number;
+  /** Seconds from call start, when known (lets the transcript seek the recording). */
+  at?: number;
   language?: string;
   node?: string; // graph agents
 }
@@ -17,28 +17,28 @@ export interface TurnLatency {
   totalMs: number;
 }
 
+/** One row of bolna-app's call_results table (Call History). */
 export interface CallRecord {
-  id: string; // Bolna run_id ("execution ID")
+  id: string; // Bolna run_id ("execution ID"); the call's ref when it never reached the agent
   callSid?: string; // Plivo CallUUID
   agentId: string;
   agentName: string;
   type: CallType;
   status: CallStatus;
-  userNumber: string;
-  fromNumber?: string;
+  userNumber?: string;
   provider: string;
   startedAt: string;
   durationSeconds: number;
   hangupBy?: HangupBy;
   terminationReason?: string;
-  costUsd: number;
+  /** Streams the Plivo recording through bolna-app; only completed calls have one. */
   recordingUrl?: string;
   transcript: TranscriptTurn[];
   latencies: TurnLatency[];
   summary?: string;
-  extracted?: Record<string, string>;
+  extracted?: Record<string, unknown>;
   rating?: number;
-  languages: string[];
+  webhook?: { url: string; status?: number; error?: string };
 }
 
 export interface CallFilters {
@@ -46,12 +46,14 @@ export interface CallFilters {
   status?: CallStatus;
   type?: CallType;
   provider?: string;
+  /** "yes": only calls that reached voicemail; "no": all others. */
+  voicemail?: "yes" | "no";
   from?: string; // ISO date
   to?: string;
   search?: string;
   page: number;
   pageSize: number;
-  sort?: { field: "startedAt" | "durationSeconds" | "costUsd"; dir: "asc" | "desc" };
+  sort?: { field: "startedAt" | "durationSeconds"; dir: "asc" | "desc" };
 }
 
 export interface CallStats {
@@ -59,9 +61,8 @@ export interface CallStats {
   completed: number;
   totalDurationSeconds: number;
   avgDurationSeconds: number;
-  totalCostUsd: number;
-  avgCostUsd: number;
   avgLatencyMs: number;
+  byStatus: Partial<Record<CallStatus, number>>;
 }
 
 export interface Page<T> {

@@ -1,17 +1,14 @@
-import { useState } from "react";
-import { Activity, FileText, Library, ListChecks, Plus, Send, Trash2, Webhook } from "lucide-react";
-import { toast } from "sonner";
+import { Library, ListChecks, Plus, Trash2, Webhook } from "lucide-react";
 import { Field, SectionCard, ToggleRow } from "@/components/form/fields";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/controls";
-import { Input } from "@/components/ui/input";
+import { Input, Textarea } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/overlays";
-import { callStatuses, type CallStatus } from "@/config/calls";
-import { delay, newId } from "@/services/mock";
-import { cn } from "@/lib/utils";
+import { categoryProblem, webhookUrlProblem } from "@/lib/agentValidation";
+import { newId } from "@/services/mock";
 import { useDraft } from "../useAgentDraft";
 
+/** Prebuilt categories (front-end templates). Names become the keys of extracted_data. */
 const extractionLibrary = [
   { name: "appointment_confirmed", description: "yes / no / reschedule: whether the patient confirmed the appointment" },
   { name: "new_slot", description: "The new date and time agreed, if rescheduled" },
@@ -22,84 +19,55 @@ const extractionLibrary = [
   { name: "preferred_language", description: "The language the caller chose" },
 ];
 
-const statusOptions: CallStatus[] = ["completed", "no-answer", "busy", "failed", "canceled"];
-
+/*
+ * Skipped for now (tracker): Trigger on statuses (A8.2), Send test (A8.3), Delivery health (A8.4)
+ * and the extraction Test button (A8.6).
+ */
 export function PostCallSection() {
   const { draft, patch } = useDraft();
   const w = draft.webhook;
-  const [sending, setSending] = useState(false);
-
-  const sendTest = async () => {
-    if (!/^https?:\/\//.test(w.url)) {
-      toast.error("Enter a webhook URL starting with https://");
-      return;
-    }
-    setSending(true);
-    await delay(900);
-    setSending(false);
-    toast.success("Sample ‘completed’ payload sent", { description: "Real delivery starts once the backend is connected (tracker A8.3)." });
-  };
+  const categories = draft.extractions.categories;
+  const urlProblem = webhookUrlProblem(w.url);
 
   return (
     <div className="flex flex-col gap-5">
       <SectionCard
         icon={Webhook}
-        title="Webhook"
-        description="We POST the call result (status, transcript, extracted data) to your URL after every call."
-        actions={
-          <Button variant="secondary" size="sm" onClick={() => toast.info("Delivery health appears once webhooks are live (tracker A8.4).")}>
-            <Activity /> Delivery health
-          </Button>
-        }
+        title="Webhook Configuration"
+        info="After every call we POST the call result (status, transcript, summary, extracted data) to this URL."
       >
         <div className="flex flex-col gap-4">
-          <Field label="Webhook URL">
-            <div className="flex gap-2">
+          <div className="grid gap-4 @xl:grid-cols-[1fr_auto] @xl:items-end">
+            <Field label="Webhook URL" info="Must accept a POST with a JSON body. Leave empty to send nothing.">
               <Input
                 value={w.url}
                 onChange={(e) => patch((d) => void (d.webhook.url = e.target.value))}
                 placeholder="https://your-endpoint.com/webhook"
                 className="font-mono"
+                aria-invalid={Boolean(urlProblem)}
               />
-              <Button variant="secondary" onClick={sendTest} loading={sending}>
-                <Send /> Send test
-              </Button>
-            </div>
-          </Field>
-          <Field label="Send for" info="Leave all unselected to send for every status.">
-            <div className="flex flex-wrap gap-1.5">
-              {statusOptions.map((s) => {
-                const on = w.statuses.includes(s);
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() =>
-                      patch((d) => void (d.webhook.statuses = on ? d.webhook.statuses.filter((x) => x !== s) : [...d.webhook.statuses, s]))
-                    }
-                    className={cn(
-                      "rounded-pill border px-3 py-1 text-xs font-medium transition-colors",
-                      on ? "border-primary-border bg-primary-soft text-primary-hover" : "bg-card text-muted-foreground hover:border-border-strong",
-                    )}
-                  >
-                    {callStatuses[s].label}
-                  </button>
-                );
-              })}
-              {w.statuses.length === 0 && <span className="self-center text-xs text-muted-foreground">All statuses</span>}
-            </div>
-          </Field>
-          <div className="flex items-center justify-between rounded-lg border px-4 py-3">
-            <span className="text-sm font-medium text-heading">Custom headers</span>
-            <Switch checked={w.headersEnabled} onCheckedChange={(v) => patch((d) => void (d.webhook.headersEnabled = v))} aria-label="Custom headers" />
+            </Field>
+            <label className="flex h-10 items-center gap-3 text-sm font-medium text-heading">
+              Add headers
+              <Switch
+                checked={w.headersEnabled}
+                onCheckedChange={(v) =>
+                  patch((d) => {
+                    d.webhook.headersEnabled = v;
+                    if (v && d.webhook.headers.length === 0) d.webhook.headers.push({ key: "", value: "" });
+                  })
+                }
+                aria-label="Add headers"
+              />
+            </label>
           </div>
+          {urlProblem && <p className="-mt-2 text-xs text-danger">{urlProblem}</p>}
           {w.headersEnabled && (
             <div className="flex flex-col gap-2">
               {w.headers.map((h, i) => (
                 <div key={i} className="grid grid-cols-[1fr_1.5fr_auto] gap-2">
-                  <Input value={h.key} placeholder="X-Api-Key" onChange={(e) => patch((d) => void (d.webhook.headers[i].key = e.target.value))} />
-                  <Input value={h.value} placeholder="value" onChange={(e) => patch((d) => void (d.webhook.headers[i].value = e.target.value))} />
+                  <Input value={h.key} placeholder="Authorization" onChange={(e) => patch((d) => void (d.webhook.headers[i].key = e.target.value))} />
+                  <Input value={h.value} placeholder="Bearer …" onChange={(e) => patch((d) => void (d.webhook.headers[i].value = e.target.value))} />
                   <Button variant="danger-ghost" size="icon-sm" aria-label="Remove header" onClick={() => patch((d) => void d.webhook.headers.splice(i, 1))}>
                     <Trash2 />
                   </Button>
@@ -115,18 +83,18 @@ export function PostCallSection() {
 
       <SectionCard
         icon={ListChecks}
-        title="Summary & extraction"
-        description="After the call, an LLM reads the transcript and fills in these fields."
+        title="Extractions"
+        info="After the call, an LLM reads the transcript and fills in each category. The results are saved with the call and sent to your webhook as extracted_data."
         actions={
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="secondary" size="sm">
-                <Library /> Field library
+                <Library /> Extraction Library
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-80 p-1">
               {extractionLibrary.map((f) => {
-                const added = draft.extractions.categories.some((c) => c.name === f.name);
+                const added = categories.some((c) => c.name.trim() === f.name);
                 return (
                   <button
                     key={f.name}
@@ -145,47 +113,51 @@ export function PostCallSection() {
       >
         <div className="flex flex-col gap-3">
           <ToggleRow
-            icon={FileText}
-            label="Call summary"
-            description="A two-line summary of every call, shown in call history."
+            label="Call Summary"
+            description="Generate a call summary after each call"
             checked={draft.extractions.summary}
             onCheckedChange={(v) => patch((d) => void (d.extractions.summary = v))}
           />
-          {draft.extractions.categories.map((c, i) => (
-            <div key={c.id} className="grid gap-2 rounded-lg border px-4 py-3 @xl:grid-cols-[220px_1fr_auto] @xl:items-center">
-              <Input
-                value={c.name}
-                className="font-mono"
-                placeholder="field_name"
-                onChange={(e) => patch((d) => void (d.extractions.categories[i].name = e.target.value))}
-              />
-              <Input
-                value={c.description}
-                placeholder="What to extract and the allowed values"
-                onChange={(e) => patch((d) => void (d.extractions.categories[i].description = e.target.value))}
-              />
-              <Button
-                variant="danger-ghost"
-                size="icon-sm"
-                aria-label="Remove field"
-                onClick={() => patch((d) => void d.extractions.categories.splice(i, 1))}
-              >
-                <Trash2 />
-              </Button>
-            </div>
-          ))}
+          {categories.map((c, i) => {
+            const problem = categoryProblem(c, categories);
+            return (
+              <div key={c.id} className="flex flex-col gap-2 rounded-lg border px-4 py-3">
+                <div className="grid gap-2 @xl:grid-cols-[240px_1fr_auto] @xl:items-start">
+                  <Input
+                    value={c.name}
+                    className="font-mono"
+                    placeholder="category_name"
+                    aria-label="Category name"
+                    aria-invalid={Boolean(problem)}
+                    onChange={(e) => patch((d) => void (d.extractions.categories[i].name = e.target.value))}
+                  />
+                  <Textarea
+                    rows={2}
+                    value={c.description}
+                    placeholder="What to extract, and the allowed values (e.g. yes / no / reschedule)"
+                    aria-label="Category description"
+                    onChange={(e) => patch((d) => void (d.extractions.categories[i].description = e.target.value))}
+                  />
+                  <Button
+                    variant="danger-ghost"
+                    size="icon-sm"
+                    aria-label="Remove category"
+                    onClick={() => patch((d) => void d.extractions.categories.splice(i, 1))}
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+                {problem && <p className="text-xs text-danger">{problem}</p>}
+              </div>
+            );
+          })}
           <button
             type="button"
             onClick={() => patch((d) => void d.extractions.categories.push({ id: newId(), name: "", description: "" }))}
             className="flex items-center justify-center gap-2 rounded-lg border border-dashed py-3 text-sm font-medium text-muted-foreground transition-colors hover:border-primary hover:bg-primary-soft hover:text-primary-hover"
           >
-            <Plus className="h-4 w-4" /> Add field
+            <Plus className="h-4 w-4" /> New Category
           </button>
-          {draft.extractions.categories.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              <Badge tone="info">{draft.extractions.categories.length}</Badge> fields will appear on each call's detail page.
-            </p>
-          )}
         </div>
       </SectionCard>
     </div>

@@ -1,41 +1,88 @@
 /**
- * Agents service. Mock implementation over src/mocks/agents.ts.
+ * Agents service, backed by bolna-app.
  *
- * Backend integration (bolna-app):
  *   listAgents     -> GET    /api/bolna/all              (then fromBolna + summarize)
- *   getAgent       -> GET    /api/bolna/agent/{id}
- *   createAgent    -> POST   /api/bolna/agent            body: toBolna(form)
+ *   getAgent       -> GET    /api/bolna/agent/{id}       { agent_id, agent_config, agent_prompts }
+ *   createAgent    -> POST   /api/bolna/agent            body: toBolna(form, template)
  *   saveAgent      -> PUT    /api/bolna/agent/{id}       body: toBolna(form, original)
+ *   duplicateAgent -> GET + POST                         (copies the stored JSON as is)
  *   deleteAgent    -> DELETE /api/bolna/agent/{id}
+ *   aiEditGraph    -> POST   /api/bolna/agent/graph-ai-edit  { instruction, graph }  (nothing is saved)
+ *
+ * bolna-app stores created_at / updated_at inside agent_config; they are read into the form and
+ * stripped from every payload we send back, since the server owns them.
  */
 import { newAgentForm } from "@/config/agent";
 import { ensureLayout } from "@/features/graph/graphUtils";
+import { bolnaApi } from "@/lib/api";
 import { fromBolna, summarize, toBolna } from "@/lib/agentMapper";
-import { agentStore } from "@/mocks/agents";
+import { formProblems } from "@/lib/agentValidation";
 import counsellor from "@/mocks/fixtures/hospital-counsellor.json";
 import noShowV4 from "@/mocks/fixtures/no-show-v4.json";
-import type { AgentForm, AgentKind, AgentSummary, BolnaAgentPayload } from "@/types/agent";
-import { delay, newId, NotFoundError } from "./mock";
+import type { AgentForm, AgentKind, AgentSummary, BolnaAgentPayload, GraphDefinition } from "@/types/agent";
+
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+interface StoredAgent {
+  agent_id: string;
+  agent_config: Json;
+  agent_prompts: BolnaAgentPayload["agent_prompts"] | null;
+}
+
+interface AgentListResponse {
+  agents: { agent_id: string; data: Json }[];
+}
+
+const SERVER_FIELDS = ["created_at", "updated_at", "assistant_status"];
+
+/**
+ * The last stored payload per agent. Saves merge the form onto it, so config keys the form does
+ * not edit (and the mapper does not know) are kept rather than dropped.
+ */
+const originals = new Map<string, BolnaAgentPayload>();
+
+function stripServerFields(config: Json): Json {
+  const copy = { ...config };
+  for (const key of SERVER_FIELDS) delete copy[key];
+  return copy;
+}
+
+function meta(id: string, config: Json) {
+  return { id, createdAt: config.created_at ?? undefined, updatedAt: config.updated_at ?? undefined };
+}
 
 export async function listAgents(kind?: AgentKind): Promise<AgentSummary[]> {
-  await delay();
-  return [...agentStore.values()]
-    .map(({ form }) => summarize(form))
+  const { agents } = await bolnaApi.get<AgentListResponse>("/all");
+  const summaries: AgentSummary[] = [];
+  for (const { agent_id, data } of agents) {
+    try {
+      const form = fromBolna({ agent_config: stripServerFields(data), agent_prompts: {} }, meta(agent_id, data));
+      summaries.push(summarize(form));
+    } catch (e) {
+      // One unreadable agent should not hide the rest of the list.
+      console.warn(`Skipping agent ${agent_id}: could not read its config`, e);
+    }
+  }
+  return summaries
     .filter((a) => !kind || a.kind === kind)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
 }
 
 export async function getAgent(id: string): Promise<AgentForm> {
-  await delay();
-  const entry = agentStore.get(id);
-  if (!entry) throw new NotFoundError("Agent");
-  ensureLayout(entry.form);
-  return structuredClone(entry.form);
+  const stored = await bolnaApi.get<StoredAgent>(`/agent/${encodeURIComponent(id)}`);
+  const payload: BolnaAgentPayload = {
+    agent_config: stripServerFields(stored.agent_config),
+    agent_prompts: stored.agent_prompts ?? {},
+  };
+  originals.set(id, payload);
+  const form = fromBolna(payload, meta(id, stored.agent_config));
+  ensureLayout(form);
+  return form;
 }
 
-/** The raw Bolna JSON as it would be stored (for the "Advanced JSON" view). */
+/** The raw Bolna JSON as it would be stored (for the "Advanced JSON" view and export). */
 export async function getAgentJson(form: AgentForm): Promise<BolnaAgentPayload> {
-  return toBolna(form, agentStore.get(form.id)?.payload);
+  return toBolna(form, originals.get(form.id));
 }
 
 const templatePayloads: Record<string, BolnaAgentPayload> = {
@@ -43,51 +90,73 @@ const templatePayloads: Record<string, BolnaAgentPayload> = {
   "no-show": noShowV4 as BolnaAgentPayload,
 };
 
+async function postAgent(payload: BolnaAgentPayload): Promise<AgentForm> {
+  const body = { ...payload, agent_config: stripServerFields(payload.agent_config) };
+  const { agent_id } = await bolnaApi.post<{ agent_id: string }>("/agent", body);
+  return getAgent(agent_id);
+}
+
 export async function createAgent(input: { templateId: string; name: string }): Promise<AgentForm> {
-  await delay();
-  const id = newId();
-  const now = new Date().toISOString();
   const template = templatePayloads[input.templateId];
   const form = template
-    ? fromBolna(template, { id, createdAt: now, updatedAt: now })
+    ? fromBolna(template, { id: "" })
     : newAgentForm(input.templateId === "blank-graph" ? "graph" : "simple", input.name);
-  form.id = id;
   form.name = input.name;
-  form.createdAt = now;
-  form.updatedAt = now;
+  // New agents start in "requested or auto detected", so a caller answering in another language is
+  // understood (templates store a fixed starting language, which reads back as "requested").
+  form.languageSwitchMode = "auto";
   ensureLayout(form);
-  agentStore.set(id, { form, payload: toBolna(form, template) });
-  return structuredClone(form);
+  return postAgent(toBolna(form, template));
 }
 
 export async function saveAgent(form: AgentForm): Promise<AgentForm> {
-  await delay();
-  const entry = agentStore.get(form.id);
-  if (!entry) throw new NotFoundError("Agent");
-  const saved = { ...structuredClone(form), updatedAt: new Date().toISOString() };
-  agentStore.set(form.id, { form: saved, payload: toBolna(saved, entry.payload) });
-  return structuredClone(saved);
+  const problems = formProblems(form);
+  if (problems.length) throw new Error(problems[0]);
+  if (!originals.has(form.id)) await getAgent(form.id);
+  const payload = toBolna(form, originals.get(form.id));
+  await bolnaApi.put(`/agent/${encodeURIComponent(form.id)}`, {
+    ...payload,
+    agent_config: stripServerFields(payload.agent_config),
+  });
+  return getAgent(form.id);
 }
 
 export async function duplicateAgent(id: string): Promise<AgentForm> {
   const source = await getAgent(id);
-  return createAgentFromForm({ ...source, name: `${source.name} (copy)` });
-}
-
-async function createAgentFromForm(form: AgentForm): Promise<AgentForm> {
-  const id = newId();
-  const now = new Date().toISOString();
-  const copy = { ...structuredClone(form), id, createdAt: now, updatedAt: now };
-  agentStore.set(id, { form: copy, payload: toBolna(copy) });
-  return structuredClone(copy);
+  const payload = structuredClone(originals.get(id)!);
+  payload.agent_config.agent_name = `${source.name} (copy)`;
+  return postAgent(payload);
 }
 
 export async function importAgent(payload: BolnaAgentPayload): Promise<AgentForm> {
-  const now = new Date().toISOString();
-  return createAgentFromForm(fromBolna(payload, { id: "", createdAt: now, updatedAt: now }));
+  return postAgent({ agent_config: payload.agent_config, agent_prompts: payload.agent_prompts ?? {} });
+}
+
+/** AI Edit: bolna-app rewrites the prompt with an LLM (AI_EDIT_MODEL). Nothing is saved. */
+export async function aiEditPrompt(prompt: string, instruction: string): Promise<{ prompt: string; model: string }> {
+  return bolnaApi.post("/agent/ai-edit", { prompt, instruction });
+}
+
+const GRAPH_KEYS = ["agent_information", "routing_instructions", "current_node_id", "nodes"] as const;
+
+/**
+ * Magic wand: bolna-app edits the graph with an LLM (AI_EDIT_MODEL) and checks the engine can run it.
+ * The graph is sent in Bolna's JSON (with the per-node settings our form doesn't show), and the
+ * edited graph comes back the same way; nothing is saved.
+ */
+export async function aiEditGraph(form: AgentForm, instruction: string): Promise<{ graph: GraphDefinition; model: string }> {
+  const payload = toBolna(form, originals.get(form.id));
+  const task = (payload.agent_config.tasks ?? []).find((t: Json) => t.task_type === "conversation");
+  const llmConfig: Json = task?.tools_config?.llm_agent?.llm_config ?? {};
+  const graph = Object.fromEntries(GRAPH_KEYS.map((k) => [k, llmConfig[k]]));
+  const res = await bolnaApi.post<{ graph: Json; model: string }>("/agent/graph-ai-edit", { instruction, graph });
+  Object.assign(llmConfig, res.graph);
+  const edited = ensureLayout(fromBolna(payload, { id: form.id, createdAt: form.createdAt, updatedAt: form.updatedAt }));
+  if (!edited.graph) throw new Error("AI Edit returned no graph");
+  return { graph: edited.graph, model: res.model };
 }
 
 export async function deleteAgent(id: string): Promise<void> {
-  await delay();
-  agentStore.delete(id);
+  await bolnaApi.delete(`/agent/${encodeURIComponent(id)}`);
+  originals.delete(id);
 }

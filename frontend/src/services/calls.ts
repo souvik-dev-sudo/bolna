@@ -1,70 +1,119 @@
 /**
- * Calls service. Mock implementation over src/mocks/calls.ts.
+ * Call History, backed by bolna-app's Postgres table call_results (local_setup/call_results.py).
  *
- * Backend integration (to build, tracker §4): bolna-app + Postgres `calls` table
- *   listCalls     -> GET /api/bolna/calls?agent_id=&status=&type=&from=&to=&q=&page=&page_size=&sort=
- *   getCall       -> GET /api/bolna/calls/{id}
- *   callStats     -> GET /api/bolna/calls/stats?<same filters>
- *   callsPerDay   -> GET /api/bolna/calls/timeseries?days=
+ *   listCalls    -> GET /api/bolna/call-history?agent_id=&status=&call_type=&provider=&voicemail=&from=&to=&q=&page=&page_size=&sort=&direction=
+ *   callStats    -> GET /api/bolna/call-history/stats?<same filters>
+ *   callsPerDay  -> GET /api/bolna/call-history/timeseries?days=&agent_id=
+ *   getCall      -> GET /api/bolna/call-history/{id}
+ *   setRating    -> PUT /api/bolna/call-history/{id}/rating   { rating }
+ *   csvUrl       ->     /api/bolna/call-history/export.csv?<same filters>  (a download link)
+ *   recording    ->     /api/bolna/call-history/{id}/recording           (streams the Plivo recording)
  */
-import { callStatuses, callTypes, hangupBy, terminationReasons } from "@/config/calls";
-import { callStore } from "@/mocks/calls";
-import type { CallFilters, CallRecord, CallStats, Page } from "@/types/call";
-import { delay, NotFoundError } from "./mock";
+import type { CallStatus, CallType, HangupBy } from "@/config/calls";
+import { bolnaApi } from "@/lib/api";
+import type { CallFilters, CallRecord, CallStats, Page, TranscriptTurn } from "@/types/call";
+import { listAgents } from "./agents";
 
-function applyFilters(calls: CallRecord[], f: Omit<CallFilters, "page" | "pageSize">) {
-  const q = f.search?.trim().toLowerCase();
-  return calls.filter((c) => {
-    if (f.agentId && c.agentId !== f.agentId) return false;
-    if (f.status && c.status !== f.status) return false;
-    if (f.type && c.type !== f.type) return false;
-    if (f.provider && c.provider !== f.provider) return false;
-    if (f.from && c.startedAt < f.from) return false;
-    if (f.to && c.startedAt > f.to) return false;
-    if (q && !(c.id.includes(q) || c.userNumber.replace(/\s/g, "").includes(q.replace(/\s/g, "")) || c.callSid?.includes(q)))
-      return false;
-    return true;
-  });
+type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+// Agent names for the rows (the table stores only agent_id); refreshed at most every 30 s.
+let agentNames: { at: number; names: Promise<Map<string, string>> } | null = null;
+function names(): Promise<Map<string, string>> {
+  if (!agentNames || Date.now() - agentNames.at > 30_000) {
+    const names = listAgents()
+      .then((agents) => new Map(agents.map((a) => [a.id, a.name])))
+      .catch(() => new Map<string, string>());
+    agentNames = { at: Date.now(), names };
+  }
+  return agentNames.names;
 }
 
+function query(filters: Omit<CallFilters, "page" | "pageSize" | "sort">, extra: Record<string, string | number | undefined> = {}) {
+  const params = new URLSearchParams();
+  const add = (key: string, value: string | number | undefined) => {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  };
+  add("agent_id", filters.agentId);
+  add("status", filters.status);
+  add("call_type", filters.type);
+  add("provider", filters.provider);
+  add("voicemail", filters.voicemail);
+  add("from", filters.from);
+  add("to", filters.to);
+  add("q", filters.search?.trim());
+  for (const [k, v] of Object.entries(extra)) add(k, v);
+  const s = params.toString();
+  return s ? `?${s}` : "";
+}
+
+function toTranscript(raw: unknown): TranscriptTurn[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((m: Json) => typeof m?.content === "string")
+    .map((m: Json) => ({ role: m.role === "assistant" ? "agent" : m.role === "user" ? "user" : "system", text: m.content }));
+}
+
+function toCall(row: Json, agentName: string): CallRecord {
+  const completed = row.status === "completed";
+  return {
+    id: row.run_id,
+    callSid: row.call_sid ?? undefined,
+    agentId: row.agent_id,
+    agentName: agentName || "Deleted agent",
+    type: (row.call_type ?? "outbound") as CallType,
+    status: row.status as CallStatus,
+    userNumber: row.user_number ? `+${String(row.user_number).replace(/^\+/, "")}` : undefined,
+    provider: row.provider ?? "plivo",
+    startedAt: row.started_at ?? row.created_at,
+    durationSeconds: Number(row.conversation_time ?? 0),
+    hangupBy: (row.hangup_by ?? undefined) as HangupBy | undefined,
+    terminationReason: row.hangup_reason ?? undefined,
+    recordingUrl: completed && row.call_sid ? `/api/bolna/call-history/${encodeURIComponent(row.run_id)}/recording` : undefined,
+    transcript: toTranscript(row.transcript),
+    latencies: Array.isArray(row.latencies) ? row.latencies : [],
+    summary: row.summary ?? undefined,
+    extracted: row.extracted_data ?? undefined,
+    rating: row.rating ?? undefined,
+    webhook: row.webhook_url ? { url: row.webhook_url, status: row.webhook_status ?? undefined, error: row.webhook_error ?? undefined } : undefined,
+  };
+}
+
+const SORT_FIELDS: Record<NonNullable<CallFilters["sort"]>["field"], string> = { startedAt: "started_at", durationSeconds: "duration" };
+
 export async function listCalls(filters: CallFilters): Promise<Page<CallRecord>> {
-  await delay();
-  let rows = applyFilters(callStore, filters);
-  if (filters.sort) {
-    const { field, dir } = filters.sort;
-    rows = [...rows].sort((a, b) => {
-      const av = a[field];
-      const bv = b[field];
-      const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv));
-      return dir === "asc" ? cmp : -cmp;
-    });
-  }
-  const start = (filters.page - 1) * filters.pageSize;
-  return { items: rows.slice(start, start + filters.pageSize), total: rows.length, page: filters.page, pageSize: filters.pageSize };
+  const [data, agents] = await Promise.all([
+    bolnaApi.get<{ items: Json[]; total: number; page: number; page_size: number }>(
+      `/call-history${query(filters, {
+        page: filters.page,
+        page_size: filters.pageSize,
+        sort: filters.sort ? SORT_FIELDS[filters.sort.field] : undefined,
+        direction: filters.sort?.dir,
+      })}`,
+    ),
+    names(),
+  ]);
+  return {
+    items: data.items.map((row) => toCall(row, agents.get(row.agent_id) ?? "")),
+    total: data.total,
+    page: data.page,
+    pageSize: data.page_size,
+  };
 }
 
 export async function getCall(id: string): Promise<CallRecord> {
-  await delay(200);
-  const call = callStore.find((c) => c.id === id);
-  if (!call) throw new NotFoundError("Call");
-  return call;
+  const [row, agents] = await Promise.all([bolnaApi.get<Json>(`/call-history/${encodeURIComponent(id)}`), names()]);
+  return toCall(row, agents.get(row.agent_id) ?? "");
 }
 
 export async function callStats(filters: Omit<CallFilters, "page" | "pageSize">): Promise<CallStats> {
-  await delay();
-  const rows = applyFilters(callStore, filters);
-  const completed = rows.filter((c) => c.status === "completed");
-  const totalDurationSeconds = rows.reduce((s, c) => s + c.durationSeconds, 0);
-  const totalCostUsd = rows.reduce((s, c) => s + c.costUsd, 0);
-  const latencies = rows.flatMap((c) => c.latencies.map((l) => l.totalMs));
+  const s = await bolnaApi.get<Json>(`/call-history/stats${query(filters)}`);
   return {
-    total: rows.length,
-    completed: completed.length,
-    totalDurationSeconds,
-    avgDurationSeconds: completed.length ? totalDurationSeconds / completed.length : 0,
-    totalCostUsd,
-    avgCostUsd: rows.length ? totalCostUsd / rows.length : 0,
-    avgLatencyMs: latencies.length ? latencies.reduce((s, v) => s + v, 0) / latencies.length : 0,
+    total: s.total,
+    completed: s.completed,
+    totalDurationSeconds: s.total_duration_seconds,
+    avgDurationSeconds: s.avg_duration_seconds,
+    avgLatencyMs: s.avg_latency_ms,
+    byStatus: s.by_status ?? {},
   };
 }
 
@@ -75,58 +124,16 @@ export interface DayBucket {
 }
 
 export async function callsPerDay(days = 14, agentId?: string): Promise<DayBucket[]> {
-  await delay();
-  const buckets = new Map<string, DayBucket>();
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 86_400_000);
-    const key = d.toISOString().slice(0, 10);
-    buckets.set(key, { date: key, total: 0, completed: 0 });
-  }
-  for (const c of callStore) {
-    if (agentId && c.agentId !== agentId) continue;
-    const b = buckets.get(c.startedAt.slice(0, 10));
-    if (!b) continue;
-    b.total += 1;
-    if (c.status === "completed") b.completed += 1;
-  }
-  return [...buckets.values()];
+  const params = new URLSearchParams({ days: String(days) });
+  if (agentId) params.set("agent_id", agentId);
+  return bolnaApi.get(`/call-history/timeseries?${params}`);
 }
 
-export async function exportCallsCsv(filters: Omit<CallFilters, "page" | "pageSize">): Promise<string> {
-  const rows = applyFilters(callStore, filters);
-  const header = [
-    "execution_id",
-    "agent",
-    "user_number",
-    "call_type",
-    "status",
-    "started_at",
-    "duration_s",
-    "hangup_by",
-    "termination_reason",
-    "cost_usd",
-    "summary",
-  ];
-  const escape = (v: unknown) => {
-    const s = v == null ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = rows.map((c) =>
-    [
-      c.id,
-      c.agentName,
-      c.userNumber,
-      callTypes[c.type].label,
-      callStatuses[c.status].label,
-      c.startedAt,
-      c.durationSeconds,
-      c.hangupBy ? hangupBy[c.hangupBy] : "",
-      c.terminationReason ? (terminationReasons[c.terminationReason] ?? c.terminationReason) : "",
-      c.costUsd.toFixed(4),
-      c.summary ?? "",
-    ]
-      .map(escape)
-      .join(","),
-  );
-  return [header.join(","), ...lines].join("\n");
+export async function setRating(id: string, rating: number | null): Promise<void> {
+  await bolnaApi.put(`/call-history/${encodeURIComponent(id)}/rating`, { rating });
+}
+
+/** Download link for the CSV of every call matching the filters (all pages). */
+export function csvUrl(filters: Omit<CallFilters, "page" | "pageSize">): string {
+  return `/api/bolna/call-history/export.csv${query(filters)}`;
 }

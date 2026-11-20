@@ -1,23 +1,30 @@
 import os
+import re
+from urllib.parse import urlparse
 import asyncio
 import base64
+import json
 import hashlib
 import io
+import shutil
 import uuid
 import wave
 import traceback
+from datetime import datetime, timezone
 import aiohttp
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Body, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as redis
 from dotenv import load_dotenv
-from bolna.constants import DEFAULT_LANGUAGE_CODE
-from bolna.helpers.utils import store_file
+from bolna.constants import DEFAULT_LANGUAGE_CODE, PREPROCESS_DIR
+from bolna.helpers.utils import VARIABLE_PATH, agent_welcome_text, store_file, update_prompt_with_context
 from bolna.prompts import *
 from bolna.helpers.logger_config import configure_logger
 from bolna.models import *
+from pydantic import ValidationError
 from bolna.llms import LiteLLM
 from bolna.agent_manager.assistant_manager import AssistantManager
+import call_results
 import database
 
 load_dotenv()
@@ -42,8 +49,18 @@ def run_in_background(coro):
 
 
 def prerender_welcome_audio(agent_config):
-    """Renders the greeting in the background so the first call does not wait for it."""
+    """Renders the greeting in the background so the first call does not wait for it. A greeting with
+    {variables} is rendered per call instead, once the call's values are known."""
+    if has_variables(agent_welcome_text(agent_config)):
+        return
     run_in_background(get_welcome_audio(agent_config))
+
+
+VARIABLE_RE = re.compile(r"\{\{?\s*" + VARIABLE_PATH + r"\s*\}?\}")
+
+
+def has_variables(text):
+    return bool(text) and bool(VARIABLE_RE.search(text))
 
 
 def prerender_static_audio(agent_config):
@@ -89,22 +106,273 @@ async def db_health():
 
 class CreateAgentPayload(BaseModel):
     agent_config: AgentModel
-    agent_prompts: Optional[Dict[str, Dict[str, str]]]
+    # {task: {"system_prompt": str, "multilingual_prompts": {lang: str}}}; TaskManager reads both.
+    agent_prompts: Optional[Dict[str, Dict[str, Union[str, Dict[str, str]]]]]
+
+
+class AiEditPayload(BaseModel):
+    prompt: str = Field(..., max_length=100_000)
+    instruction: str = Field(..., min_length=1, max_length=4_000)
+
+
+AI_EDIT_SYSTEM_PROMPT = """You edit the system prompt of a phone voice agent.
+Apply the user's instruction to the prompt and change nothing else.
+Keep the prompt's language, structure and formatting (headings, lists).
+Keep every variable placeholder exactly as written, e.g. {name} or {{name}}.
+Reply with the complete revised prompt only: no preamble, no explanation, no code fences."""
+
+
+class GraphAiEditPayload(BaseModel):
+    instruction: str = Field(..., min_length=1, max_length=4_000)
+    # The graph part of llm_config: agent_information, routing_instructions, current_node_id, nodes.
+    graph: Dict
+
+
+GRAPH_AI_EDIT_SYSTEM_PROMPT = """You edit the conversation graph of a phone voice agent.
+The graph is JSON: {"agent_information", "routing_instructions", "current_node_id", "nodes"}.
+Each node: {"id", "node_type" ("llm" speaks with its prompt, "static" says static_message, "router" only routes),
+"prompt", "static_message", "edges": [{"to_node_id", "condition", "label"}]}.
+"current_node_id" is the start node. Every edge's to_node_id must be the id of a node in "nodes".
+A node with no edges ends the conversation.
+
+Apply the user's instruction and change nothing else: keep every other node, edge, prompt and field exactly
+as given, including fields you don't recognise. Keep the language of the texts and keep variable placeholders
+such as {name} or {{name}} exactly as written. New node ids use letters, digits and underscores.
+
+Reply with the complete edited graph as one JSON object with the same four keys, and nothing else."""
+
+GRAPH_KEYS = ("agent_information", "routing_instructions", "current_node_id", "nodes")
+
+
+def merge_graph_edit(original, edited):
+    """The model's graph, with every field it left out taken back from the original node or edge
+    (per-node models, edge types, priorities...). Positions are never sent, so they always come back."""
+    old_nodes = {n.get("id"): n for n in original.get("nodes") or [] if isinstance(n, dict)}
+    nodes = []
+    for node in edited.get("nodes") or []:
+        if not isinstance(node, dict):
+            raise ValueError("a node is not an object")
+        old = old_nodes.get(node.get("id"), {})
+        old_edges = {e.get("to_node_id"): e for e in old.get("edges") or [] if isinstance(e, dict)}
+        merged = {**old, **node}
+        merged["edges"] = [{**old_edges.get(e.get("to_node_id"), {}), **e} for e in node.get("edges") or [] if isinstance(e, dict)]
+        nodes.append(merged)
+    graph = {key: edited.get(key, original.get(key)) for key in GRAPH_KEYS}
+    graph["nodes"] = nodes
+    return graph
+
+
+def check_graph(graph):
+    """Raises ValueError with a readable reason when the engine could not run this graph."""
+    if not graph["nodes"]:
+        raise ValueError("the graph has no nodes")
+    config = GraphAgentConfig(
+        agent_information=graph.get("agent_information") or "",
+        routing_instructions=graph.get("routing_instructions"),
+        current_node_id=graph.get("current_node_id") or "",
+        nodes=graph["nodes"],
+    )
+    ids = [n.id for n in config.nodes]
+    duplicates = sorted({i for i in ids if ids.count(i) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate node ids: {', '.join(duplicates)}")
+    if config.current_node_id not in ids:
+        raise ValueError(f"start node '{config.current_node_id}' is not in the graph")
+    for node in config.nodes:
+        for edge in node.edges:
+            if edge.to_node_id not in ids:
+                raise ValueError(f"node '{node.id}' links to missing node '{edge.to_node_id}'")
+
+
+@app.post("/agent/graph-ai-edit")
+async def ai_edit_graph(payload: GraphAiEditPayload):
+    """Edits a graph agent's nodes and edges following an instruction. Returns the new graph; nothing is saved."""
+    model = os.getenv("AI_EDIT_MODEL", "gpt-4.1-mini")
+    original = payload.graph
+    if not isinstance(original.get("nodes"), list):
+        raise HTTPException(status_code=422, detail="graph.nodes must be a list")
+    sent = {key: original.get(key) for key in GRAPH_KEYS}
+    sent["nodes"] = [{k: v for k, v in n.items() if k != "position"} for n in original["nodes"] if isinstance(n, dict)]
+    try:
+        llm = LiteLLM(model=model, max_tokens=16_000, temperature=0.1)
+        text = await llm.generate(
+            messages=[
+                {"role": "system", "content": GRAPH_AI_EDIT_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Instruction:\n{payload.instruction}\n\nGraph:\n{json.dumps(sent, ensure_ascii=False)}"},
+            ],
+            request_json=True,
+        )
+    except Exception as e:
+        logger.error(f"Graph AI edit failed with {model}: {type(e).__name__}: {e}")
+        reason = {
+            "AuthenticationError": "the API key was rejected",
+            "RateLimitError": "rate limit or no credit left on the provider account",
+            "NotFoundError": f"model {model} was not found",
+        }.get(type(e).__name__, type(e).__name__)
+        raise HTTPException(status_code=502, detail=f"AI Edit could not reach {model}: {reason}")
+
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`").split("\n", 1)[-1].strip()
+    try:
+        edited = json.loads(text)
+        if not isinstance(edited, dict):
+            raise ValueError("the reply is not a JSON object")
+        graph = merge_graph_edit(original, edited)
+        check_graph(graph)
+    except (ValueError, ValidationError) as e:
+        # json.JSONDecodeError is a ValueError. Pydantic's message names the bad field.
+        logger.error(f"Graph AI edit returned an unusable graph: {e}")
+        raise HTTPException(status_code=502, detail=f"AI Edit returned a graph the engine can't run: {str(e)[:300]}")
+    return {"graph": graph, "model": model}
+
+
+#############################################################################################
+# Agent records
+#############################################################################################
+# An agent is its config in Redis (key = agent id) plus its prompts in
+# agent_data/{id}/conversation_details.json. created_at / updated_at are stored inside the
+# Redis config; the engine reads config keys by name, so the extra keys are ignored at call time.
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def is_agent_id(agent_id):
+    """Agent ids are UUIDs; anything else (audio cache keys, paths) is not an agent."""
+    try:
+        return str(uuid.UUID(agent_id)) == agent_id.lower()
+    except (ValueError, AttributeError):
+        return False
+
+
+def prompts_path(agent_id):
+    return os.path.join(PREPROCESS_DIR, agent_id, "conversation_details.json")
+
+
+def with_timestamps(agent_id, agent_config):
+    """Fills created_at / updated_at for agents saved before they were stored, from the prompts file's mtime."""
+    if not agent_config.get("created_at"):
+        try:
+            mtime = os.path.getmtime(prompts_path(agent_id))
+            agent_config["created_at"] = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+        except OSError:
+            agent_config["created_at"] = None
+    if not agent_config.get("updated_at"):
+        agent_config["updated_at"] = agent_config["created_at"]
+    return agent_config
+
+
+def read_prompts(agent_id):
+    try:
+        with open(prompts_path(agent_id)) as f:
+            return json.load(f) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+async def load_agent_config(agent_id):
+    """The stored config, or a 404 when the id is not an agent."""
+    if not is_agent_id(agent_id):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent_data = await redis_client.get(agent_id)
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return json.loads(agent_data)
+
+
+@app.post("/agent/ai-edit")
+async def ai_edit_prompt(payload: AiEditPayload):
+    """Rewrites an agent prompt following an instruction. Returns the new prompt; nothing is saved."""
+    model = os.getenv("AI_EDIT_MODEL", "gpt-4.1-mini")
+    try:
+        llm = LiteLLM(model=model, max_tokens=4000, temperature=0.2)
+        text = await llm.generate(
+            messages=[
+                {"role": "system", "content": AI_EDIT_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"Instruction:\n{payload.instruction}\n\nPrompt:\n{payload.prompt or '(empty)'}",
+                },
+            ]
+        )
+    except Exception as e:
+        # LiteLLM raises typed errors (AuthenticationError, RateLimitError, ...); their names say enough.
+        logger.error(f"AI edit failed with {model}: {type(e).__name__}: {e}")
+        reason = {
+            "AuthenticationError": "the API key was rejected",
+            "RateLimitError": "rate limit or no credit left on the provider account",
+            "NotFoundError": f"model {model} was not found",
+        }.get(type(e).__name__, type(e).__name__)
+        raise HTTPException(status_code=502, detail=f"AI Edit could not reach {model}: {reason}")
+
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`").split("\n", 1)[-1].strip()
+    if not text:
+        raise HTTPException(status_code=502, detail=f"AI Edit got an empty reply from {model}")
+    return {"prompt": text, "model": model}
 
 
 @app.get("/agent/{agent_id}")
 async def get_agent(agent_id: str):
-    """Fetches an agent's information by ID."""
+    """Fetches an agent's config and prompts by ID."""
     try:
-        agent_data = await redis_client.get(agent_id)
-        if not agent_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
+        agent_config = await load_agent_config(agent_id)
+        return {
+            "agent_id": agent_id,
+            "agent_config": with_timestamps(agent_id, agent_config),
+            "agent_prompts": read_prompts(agent_id),
+        }
 
-        return json.loads(agent_data)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+async def prepare_extraction_tasks(data):
+    """Makes sure every extraction task has the schema the engine fills, at the place it reads it
+    (tools_config.llm_agent.llm_config.extraction_json, see TaskManager.load_prompt).
+
+    The dashboard sends the schema itself ({field: instruction}, built from its categories), so
+    this is a no-op for it. Payloads with only extraction_details (free text) get the schema
+    generated by an LLM (EXTRACTION_PROMPT_GENERATION_MODEL, default gpt-4.1-mini)."""
+    for task in data.get("tasks") or []:
+        if task.get("task_type") != "extraction":
+            continue
+        llm_agent = (task.get("tools_config") or {}).get("llm_agent") or {}
+        # Standard shape: {agent_type, agent_flow_type, llm_config: {...}}; older payloads were flat.
+        llm_config = llm_agent.get("llm_config") if isinstance(llm_agent.get("llm_config"), dict) else llm_agent
+        if llm_config.get("extraction_json"):
+            continue
+        details = (llm_config.get("extraction_details") or "").strip()
+        if not details:
+            raise HTTPException(status_code=422, detail="Extraction task has no categories")
+        model = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL") or "gpt-4.1-mini"
+        try:
+            generated = await LiteLLM(model=model, max_tokens=2000).generate(
+                messages=[
+                    {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
+                    {"role": "user", "content": details},
+                ]
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not build the extraction schema with {model}: {e}")
+        # Models often wrap JSON in ``` fences; the schema must be a plain {field: instruction} object.
+        text = (generated or "").strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else ""
+            text = text.rsplit("```", 1)[0]
+        try:
+            schema = json.loads(text)
+        except ValueError:
+            schema = None
+        if not isinstance(schema, dict) or not schema:
+            raise HTTPException(status_code=502, detail=f"{model} did not return a JSON object for the extraction schema")
+        llm_config["extraction_json"] = json.dumps(schema, indent=2, ensure_ascii=False)
 
 
 @app.post("/agent")
@@ -112,25 +380,11 @@ async def create_agent(agent_data: CreateAgentPayload):
     agent_uuid = str(uuid.uuid4())
     data_for_db = agent_data.agent_config.model_dump()
     data_for_db["assistant_status"] = "seeding"
+    data_for_db["created_at"] = data_for_db["updated_at"] = now_iso()
     agent_prompts = agent_data.agent_prompts
     logger.info(f"Data for DB {data_for_db}")
 
-    if len(data_for_db["tasks"]) > 0:
-        logger.info("Setting up follow up tasks")
-        for index, task in enumerate(data_for_db["tasks"]):
-            if task["task_type"] == "extraction":
-                extraction_prompt_llm = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL")
-                extraction_prompt_generation_llm = LiteLLM(model=extraction_prompt_llm, max_tokens=2000)
-                extraction_prompt = await extraction_prompt_generation_llm.generate(
-                    messages=[
-                        {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
-                        {
-                            "role": "user",
-                            "content": data_for_db["tasks"][index]["tools_config"]["llm_agent"]["extraction_details"],
-                        },
-                    ]
-                )
-                data_for_db["tasks"][index]["tools_config"]["llm_agent"]["extraction_json"] = extraction_prompt
+    await prepare_extraction_tasks(data_for_db)
 
     stored_prompt_file_path = f"{agent_uuid}/conversation_details.json"
     await asyncio.gather(
@@ -147,35 +401,17 @@ async def create_agent(agent_data: CreateAgentPayload):
 async def edit_agent(agent_id: str, agent_data: CreateAgentPayload = Body(...)):
     """Edits an existing agent based on the provided agent_id."""
     try:
-        existing_data = await redis_client.get(agent_id)
-        if not existing_data:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
-        existing_data = json.loads(existing_data)
+        existing_data = with_timestamps(agent_id, await load_agent_config(agent_id))
 
         new_data = agent_data.agent_config.model_dump()
         new_data["assistant_status"] = "updated"
+        new_data["created_at"] = existing_data["created_at"] or now_iso()
+        new_data["updated_at"] = now_iso()
         agent_prompts = agent_data.agent_prompts
 
         logger.info(f"Updating Agent {agent_id}: {new_data}")
 
-        for index, task in enumerate(new_data.get("tasks", [])):
-            if task.get("task_type") == "extraction":
-                extraction_prompt_llm = os.getenv("EXTRACTION_PROMPT_GENERATION_MODEL")
-                if not extraction_prompt_llm:
-                    raise HTTPException(status_code=500, detail="Extraction model not configured")
-
-                extraction_prompt_generation_llm = LiteLLM(model=extraction_prompt_llm, max_tokens=2000)
-                extraction_details = task["tools_config"]["llm_agent"].get("extraction_details", "")
-
-                extraction_prompt = await extraction_prompt_generation_llm.generate(
-                    messages=[
-                        {"role": "system", "content": EXTRACTION_PROMPT_GENERATION_PROMPT},
-                        {"role": "user", "content": extraction_details},
-                    ]
-                )
-
-                new_data["tasks"][index]["tools_config"]["llm_agent"]["extraction_json"] = extraction_prompt
+        await prepare_extraction_tasks(new_data)
 
         stored_prompt_file_path = f"{agent_id}/conversation_details.json"
         await asyncio.gather(
@@ -187,6 +423,8 @@ async def edit_agent(agent_id: str, agent_data: CreateAgentPayload = Body(...)):
 
         return {"agent_id": agent_id, "state": "updated"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -196,13 +434,14 @@ async def edit_agent(agent_id: str, agent_data: CreateAgentPayload = Body(...)):
 async def delete_agent(agent_id: str):
     """Deletes an agent by ID."""
     try:
-        agent_exists = await redis_client.exists(agent_id)
-        if not agent_exists:
-            raise HTTPException(status_code=404, detail="Agent not found")
-
+        await load_agent_config(agent_id)
         await redis_client.delete(agent_id)
+        # agent_id is a validated UUID, so this path stays inside agent_data/.
+        shutil.rmtree(os.path.join(PREPROCESS_DIR, agent_id), ignore_errors=True)
         return {"agent_id": agent_id, "state": "deleted"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deleting agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -212,7 +451,7 @@ async def delete_agent(agent_id: str):
 async def get_all_agents():
     """Fetches all agents stored in Redis."""
     try:
-        agent_keys = [k for k in await redis_client.keys("*") if not k.startswith(AUDIO_CACHE_PREFIXES)]
+        agent_keys = [k for k in await redis_client.keys("*") if is_agent_id(k)]
 
         if not agent_keys:
             return {"agents": []}
@@ -224,7 +463,11 @@ async def get_all_agents():
             except Exception as e:
                 logger.error(f"An error occurred with key {key}: {e}")
 
-        agents = [{"agent_id": key, "data": json.loads(data)} for key, data in zip(agent_keys, agents_data) if data]
+        agents = [
+            {"agent_id": key, "data": with_timestamps(key, json.loads(data))}
+            for key, data in zip(agent_keys, agents_data)
+            if data
+        ]
 
         return {"agents": agents}
 
@@ -275,9 +518,12 @@ def tts_request(synthesizer, transcript, label):
     return None
 
 
-def welcome_audio_request(agent_config):
-    """(provider, payload) for the agent's welcome message in the active language, or None if there is nothing to render."""
-    welcome_text = agent_config.get("agent_welcome_message")
+def welcome_audio_request(agent_config, context_data=None):
+    """(provider, payload) for the agent's welcome message in the active language, or None if there is nothing to render.
+    {variables} are filled from the call's context first, as AssistantManager does for the text."""
+    welcome_text = agent_welcome_text(agent_config)
+    if has_variables(welcome_text):
+        welcome_text = update_prompt_with_context(welcome_text, context_data)
     if not welcome_text or not agent_config.get("tasks"):
         logger.warning("Welcome audio: no welcome message or tasks in agent config, skipping")
         return None
@@ -309,9 +555,9 @@ async def get_cached_audio(prefix, request, label):
     return audio
 
 
-async def get_welcome_audio(agent_config):
+async def get_welcome_audio(agent_config, context_data=None):
     """Returns the welcome audio from the Redis cache, rendering and caching it on a miss."""
-    request = welcome_audio_request(agent_config)
+    request = welcome_audio_request(agent_config, context_data)
     if request is None:
         return None
     return await get_cached_audio(WELCOME_AUDIO_PREFIX, request, "Welcome audio")
@@ -384,8 +630,10 @@ async def synthesize_audio(provider, payload, label):
 # Websocket
 #############################################################################################
 @app.websocket("/chat/v1/{agent_id}")
-async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: str = Query(None)):
-    logger.info("Connected to ws")
+async def websocket_endpoint(
+    agent_id: str, websocket: WebSocket, user_agent: str = Query(None), ref: Optional[str] = Query(None)
+):
+    logger.info(f"Connected to ws (ref={ref})")
     await websocket.accept()
     active_websockets.append(websocket)
     agent_config, context_data = None, None
@@ -397,23 +645,341 @@ async def websocket_endpoint(agent_id: str, websocket: WebSocket, user_agent: st
         traceback.print_exc()
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    welcome_audio, static_audio = await asyncio.gather(get_welcome_audio(agent_config), get_static_audio(agent_config))
+    # "Initiated At" in Call History: when a tracked call was placed, else when the stream connected.
+    started_at = datetime.now(timezone.utc)
+    # A tracked call (placed from the dashboard): its variable values become the call's context.
+    tracked = await load_tracked_call(ref)
+    if tracked and tracked.get("created_at"):
+        try:
+            started_at = datetime.fromisoformat(tracked["created_at"])
+        except ValueError:
+            pass
+    if tracked:
+        context_data = {"recipient_data": tracked.get("user_data") or {}}
+        await update_tracked_call(ref, state="live", started_at=now_iso())
+
+    welcome_audio, static_audio = await asyncio.gather(
+        get_welcome_audio(agent_config, context_data), get_static_audio(agent_config)
+    )
     assistant_manager = AssistantManager(
         agent_config,
         websocket,
         agent_id,
+        context_data=context_data,
         welcome_message_audio=welcome_audio,
         static_message_audio=static_audio,
     )
 
+    # Each task's output: the conversation first, then the follow-up tasks (summary, extraction).
+    outputs = {}
     try:
         async for index, task_output in assistant_manager.run(local=True):
             logger.info(task_output)
             if index == 0:
+                outputs["conversation"] = task_output
+                if tracked:
+                    await update_tracked_call(
+                        ref, state="processing", call_sid=task_output.get("call_sid"), run_id=task_output.get("run_id")
+                    )
                 # Links the call's transcript and latencies (run_id) to its recording (Plivo CallUUID).
                 logger.info(f"call_summary run_id={task_output.get('run_id')} call_sid={task_output.get('call_sid')}")
+            elif task_output.get("task_type"):
+                outputs[task_output["task_type"]] = task_output
     except WebSocketDisconnect:
         active_websockets.remove(websocket)
     except Exception as e:
         traceback.print_exc()
         logger.error(f"error in executing {e}")
+    finally:
+        # Stored (and sent to the webhook) even if a follow-up task failed: whatever finished is kept.
+        if "conversation" in outputs:
+            await call_results.finish_call(
+                agent_id, agent_config, outputs, ref=ref if tracked else None, tracked=tracked, started_at=started_at
+            )
+        if tracked:
+            ended = "completed" if "conversation" in outputs else "failed"
+            await update_tracked_call(ref, state=ended, ended_at=now_iso())
+
+
+#############################################################################################
+# Tracked calls: test calls placed from the dashboard (plivo-app registers them here)
+#############################################################################################
+TRACKED_CALL_PREFIX = "tracked_call:"
+TRACKED_CALL_TTL_S = 24 * 3600
+REF_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+# Plivo CallStatus values for calls that never reached the agent.
+UNANSWERED_STATES = {"busy", "no-answer", "timeout", "failed", "canceled", "cancel"}
+
+
+async def load_tracked_call(ref):
+    if not ref or not REF_RE.match(ref):
+        return None
+    try:
+        raw = await redis_client.get(TRACKED_CALL_PREFIX + ref)
+        return json.loads(raw) if raw else None
+    except Exception as e:
+        logger.error(f"Tracked call {ref}: could not load: {e}")
+        return None
+
+
+async def update_tracked_call(ref, **fields):
+    """Merges fields into the tracked call. Never raises: tracking must not affect the call."""
+    try:
+        current = await load_tracked_call(ref) or {}
+        current.update({k: v for k, v in fields.items() if v is not None})
+        await redis_client.set(TRACKED_CALL_PREFIX + ref, json.dumps(current), ex=TRACKED_CALL_TTL_S)
+    except Exception as e:
+        logger.error(f"Tracked call {ref}: could not update: {e}")
+
+
+class TrackedCallPayload(BaseModel):
+    agent_id: str
+    phone: Optional[str] = None
+    user_data: Optional[Dict[str, Union[str, int, float, bool]]] = None
+
+
+@app.put("/calls/{ref}")
+async def register_tracked_call(ref: str, payload: TrackedCallPayload):
+    """Registers a call before it is placed, with the variable values for its prompt."""
+    if not REF_RE.match(ref):
+        raise HTTPException(status_code=422, detail="Invalid call reference")
+    user_data = {k: str(v) for k, v in (payload.user_data or {}).items() if k}
+    data = {
+        "ref": ref,
+        "agent_id": payload.agent_id,
+        "phone": payload.phone,
+        "user_data": user_data,
+        "state": "ringing",
+        "created_at": now_iso(),
+    }
+    await redis_client.set(TRACKED_CALL_PREFIX + ref, json.dumps(data), ex=TRACKED_CALL_TTL_S)
+    return data
+
+
+@app.post("/calls/{ref}/hangup")
+async def tracked_call_hangup(ref: str, payload: Dict = Body(...)):
+    """Plivo's hangup, forwarded by plivo-app. Only changes the state of a call that never reached
+    the agent; a call that did is finished by the websocket handler."""
+    tracked = await load_tracked_call(ref)
+    if not tracked:
+        raise HTTPException(status_code=404, detail="Unknown call")
+    status = str(payload.get("status") or "").lower()
+    fields = {"hangup_cause": payload.get("cause"), "call_uuid": payload.get("call_uuid")}
+    if tracked.get("state") == "ringing":
+        fields["state"] = status if status in UNANSWERED_STATES else "failed"
+        fields["ended_at"] = now_iso()
+        if status not in UNANSWERED_STATES:
+            fields["error"] = "The call ended before the agent connected"
+        # The call never reached the agent, so the websocket handler stores nothing: record it here.
+        await call_results.record_unanswered(
+            tracked, status if status in UNANSWERED_STATES else "failed", payload.get("cause"), payload.get("call_uuid")
+        )
+    await update_tracked_call(ref, **fields)
+    return {"ok": True}
+
+
+@app.get("/calls/{ref}")
+async def get_tracked_call(ref: str):
+    """State of a tracked call, with its stored result once it is completed."""
+    tracked = await load_tracked_call(ref)
+    if not tracked:
+        raise HTTPException(status_code=404, detail="Unknown call")
+    result = None
+    if tracked.get("state") == "completed":
+        result = await call_results.result_by_ref(ref)
+    return {**tracked, "result": result}
+
+
+#############################################################################################
+# Call History (dashboard only: nginx forwards just /chat/ to bolna-app, so none of this is public)
+#############################################################################################
+def _history_filters(agent_id, status, call_type, provider, voicemail, date_from, date_to, q):
+    def when(value, name):
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"{name} must be an ISO date or time")
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    return {
+        "agent_id": agent_id,
+        "status": status,
+        "call_type": call_type,
+        "provider": provider,
+        "voicemail": voicemail,
+        "from": when(date_from, "from"),
+        "to": when(date_to, "to"),
+        "q": q,
+    }
+
+
+def _require_database():
+    if not database.is_configured():
+        raise HTTPException(status_code=503, detail="Call History needs Postgres (DATABASE_URL is not set)")
+
+
+@app.get("/call-history")
+async def call_history(
+    agent_id: Optional[str] = None,
+    status: Optional[str] = None,
+    call_type: Optional[str] = None,
+    provider: Optional[str] = None,
+    voicemail: Optional[str] = None,
+    date_from: Optional[str] = Query(None, alias="from"),
+    date_to: Optional[str] = Query(None, alias="to"),
+    q: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    sort: str = "started_at",
+    direction: str = "desc",
+):
+    _require_database()
+    filters = _history_filters(agent_id, status, call_type, provider, voicemail, date_from, date_to, q)
+    return await call_results.list_calls(filters, page, page_size, sort, direction)
+
+
+@app.get("/call-history/stats")
+async def call_history_stats(
+    agent_id: Optional[str] = None,
+    status: Optional[str] = None,
+    call_type: Optional[str] = None,
+    provider: Optional[str] = None,
+    voicemail: Optional[str] = None,
+    date_from: Optional[str] = Query(None, alias="from"),
+    date_to: Optional[str] = Query(None, alias="to"),
+    q: Optional[str] = None,
+):
+    _require_database()
+    filters = _history_filters(agent_id, status, call_type, provider, voicemail, date_from, date_to, q)
+    return await call_results.call_stats(filters)
+
+
+@app.get("/call-history/timeseries")
+async def call_history_timeseries(days: int = Query(14, ge=1, le=90), agent_id: Optional[str] = None):
+    _require_database()
+    return await call_results.calls_per_day(days, agent_id)
+
+
+async def _agent_names():
+    names = {}
+    for key in await redis_client.keys("*"):
+        if not is_agent_id(key):
+            continue
+        try:
+            names[key] = json.loads(await redis_client.get(key)).get("agent_name", "")
+        except Exception:
+            continue
+    return names
+
+
+@app.get("/call-history/export.csv")
+async def call_history_export(
+    agent_id: Optional[str] = None,
+    status: Optional[str] = None,
+    call_type: Optional[str] = None,
+    provider: Optional[str] = None,
+    voicemail: Optional[str] = None,
+    date_from: Optional[str] = Query(None, alias="from"),
+    date_to: Optional[str] = Query(None, alias="to"),
+    q: Optional[str] = None,
+):
+    _require_database()
+    filters = _history_filters(agent_id, status, call_type, provider, voicemail, date_from, date_to, q)
+    body = await call_results.export_csv(filters, await _agent_names())
+    filename = f"call-history-{datetime.now(timezone.utc):%Y%m%d-%H%M}.csv"
+    return Response(content=body, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.get("/call-history/{run_id}")
+async def call_history_detail(run_id: str):
+    _require_database()
+    call = await call_results.get_call(run_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    return call
+
+
+class RatingPayload(BaseModel):
+    rating: Optional[int] = Field(None, ge=1, le=5)
+
+
+@app.put("/call-history/{run_id}/rating")
+async def call_history_rating(run_id: str, payload: RatingPayload):
+    _require_database()
+    saved = await call_results.set_rating(run_id, payload.rating)
+    if not saved:
+        raise HTTPException(status_code=404, detail="Call not found")
+    return saved
+
+
+# Recordings stay in Plivo's storage; they are fetched with our Plivo credentials and kept briefly in
+# memory so the player can seek (Range requests) without downloading the file again.
+RECORDING_CACHE_SIZE = 8
+_recording_cache = {}
+
+
+def _plivo_recording_url(call_uuid):
+    import plivo
+
+    client = plivo.RestClient(os.getenv("PLIVO_AUTH_ID"), os.getenv("PLIVO_AUTH_TOKEN"))
+    recordings = list(client.recordings.list(call_uuid=call_uuid, limit=1))
+    return recordings[0].recording_url if recordings else None
+
+
+async def _recording_bytes(call_uuid):
+    if call_uuid in _recording_cache:
+        return _recording_cache[call_uuid]
+    url = await asyncio.to_thread(_plivo_recording_url, call_uuid)
+    if not url:
+        return None
+    host = (urlparse(url).hostname or "")
+    if urlparse(url).scheme != "https" or not (host == "plivo.com" or host.endswith(".plivo.com")):
+        # The request carries our Plivo credentials, so it must only ever go to Plivo.
+        logger.error(f"Recording for {call_uuid}: refusing non-Plivo URL {url}")
+        return None
+    auth = aiohttp.BasicAuth(os.getenv("PLIVO_AUTH_ID"), os.getenv("PLIVO_AUTH_TOKEN"))
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+        async with session.get(url, auth=auth) as response:
+            if response.status != 200:
+                logger.error(f"Recording for {call_uuid}: Plivo returned {response.status}")
+                return None
+            audio = await response.read()
+    if len(_recording_cache) >= RECORDING_CACHE_SIZE:
+        _recording_cache.pop(next(iter(_recording_cache)))
+    _recording_cache[call_uuid] = audio
+    return audio
+
+
+@app.get("/call-history/{run_id}/recording")
+async def call_history_recording(run_id: str, range_header: Optional[str] = Header(None, alias="range")):
+    _require_database()
+    call = await call_results.get_call(run_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if not call.get("call_sid") or call.get("status") != "completed":
+        raise HTTPException(status_code=404, detail="No recording for this call")
+    try:
+        audio = await _recording_bytes(call["call_sid"])
+    except Exception as e:
+        logger.error(f"Recording for {run_id}: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch the recording from Plivo")
+    if not audio:
+        raise HTTPException(status_code=404, detail="No recording for this call")
+
+    size = len(audio)
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"}
+    match = re.match(r"bytes=(\d*)-(\d*)$", range_header or "")
+    if match and (match.group(1) or match.group(2)):
+        if match.group(1):
+            start = int(match.group(1))
+            end = int(match.group(2)) if match.group(2) else size - 1
+        else:  # "bytes=-N": the last N bytes
+            start, end = max(0, size - int(match.group(2))), size - 1
+        if start >= size:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        end = min(end, size - 1)
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        return Response(content=audio[start : end + 1], status_code=206, media_type="audio/mpeg", headers=headers)
+    return Response(content=audio, media_type="audio/mpeg", headers=headers)

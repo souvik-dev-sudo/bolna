@@ -1130,6 +1130,28 @@ def select_message_by_language(message_config: Union[str, dict], detected_langua
     return ""
 
 
+def agent_starting_language(agent_config: dict) -> str:
+    """The language a call starts in: the conversation synthesizer's active language, else its configured one."""
+    from bolna.constants import DEFAULT_LANGUAGE_CODE
+
+    for task in agent_config.get("tasks") or []:
+        if task.get("task_type", "conversation") != "conversation":
+            continue
+        synthesizer = (task.get("tools_config") or {}).get("synthesizer") or {}
+        language = synthesizer.get("active") or (synthesizer.get("provider_config") or {}).get("language")
+        if language:
+            return language.split("-")[0].lower()
+    return DEFAULT_LANGUAGE_CODE
+
+
+def agent_welcome_text(agent_config: dict, default: str = "") -> str:
+    """The welcome message for the call's starting language; agent_welcome_message may be a str or {lang: text}."""
+    welcome = agent_config.get("agent_welcome_message", default)
+    if welcome is None:
+        return ""
+    return select_message_by_language(welcome, agent_starting_language(agent_config))
+
+
 def has_non_english_variants(message_config: Union[str, dict]) -> bool:
     """Check if dict has non-'en' languages."""
     return (

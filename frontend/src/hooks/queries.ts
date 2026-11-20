@@ -73,6 +73,17 @@ export const useCallStats = (filters: Omit<CallFilters, "page" | "pageSize">) =>
 export const useCallsPerDay = (days = 14, agentId?: string) =>
   useQuery({ queryKey: keys.callsPerDay(days, agentId), queryFn: () => calls.callsPerDay(days, agentId) });
 
+export function useSetCallRating() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, rating }: { id: string; rating: number | null }) => calls.setRating(id, rating),
+    onSuccess: (_, { id }) => {
+      void qc.invalidateQueries({ queryKey: keys.call(id) });
+      void qc.invalidateQueries({ queryKey: ["calls"] });
+    },
+  });
+}
+
 // ---- Knowledge base --------------------------------------------------------------------------
 export const useKnowledgeBases = () =>
   useQuery({

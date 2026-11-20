@@ -1,10 +1,8 @@
-import { useState } from "react";
-import { Braces, FlaskConical, MousePointerClick, Settings2, Workflow, Wrench } from "lucide-react";
-import { EmptyState } from "@/components/EmptyState";
+import { useState, type ComponentType } from "react";
+import { ArrowLeft, ChevronRight } from "lucide-react";
 import { Field, LocalizedText } from "@/components/form/fields";
-import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
-import { Accordion, AccordionItem, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/misc";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/misc";
 import { Select } from "@/components/ui/select";
 import { llmProviders } from "@/config/providers";
 import { TestAgentPanel } from "@/features/testing/TestAgentPanel";
@@ -61,8 +59,39 @@ function AgentBasics({ mutateGraph }: { mutateGraph: (fn: (g: GraphDefinition) =
   );
 }
 
+type MutateGraph = (fn: (g: GraphDefinition) => void) => void;
+
+/** Agent setup rows, in Bolna's order; Calling and Extractions are ours (they work for graph agents too). */
+const setupSections: { id: string; title: string; Component: ComponentType<{ mutateGraph: MutateGraph }> }[] = [
+  { id: "basics", title: "Agent Basics", Component: AgentBasics },
+  { id: "languages", title: "Languages and Voice", Component: LanguagesSection },
+  { id: "llm", title: "LLM", Component: IntelligenceSection },
+  { id: "conversation", title: "Conversation Settings", Component: EngineSection },
+  { id: "calling", title: "Calling", Component: CallingSection },
+  { id: "post-call", title: "Extractions", Component: PostCallSection },
+];
+
+function BackHeader({ title, onBack, mono }: { title: string; onBack: () => void; mono?: boolean }) {
+  return (
+    <button type="button" onClick={onBack} className="mb-4 flex w-full items-center gap-2 text-left text-base font-semibold text-heading hover:text-primary">
+      <ArrowLeft className="h-4 w-4 shrink-0" />
+      <span className={mono ? "truncate font-mono text-sm" : "truncate"}>{title}</span>
+    </button>
+  );
+}
+
+function SetupRow({ title, onClick }: { title: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex w-full items-center justify-between border-b py-4 text-left text-[15px] text-heading hover:text-primary">
+      {title}
+      <ChevronRight className="h-4 w-4 text-muted-foreground" />
+    </button>
+  );
+}
+
 export function GraphInspector({
   selectedId,
+  onCloseNode,
   issues,
   mutateGraph,
   onDeleteNode,
@@ -70,85 +99,73 @@ export function GraphInspector({
   onTabChange,
 }: {
   selectedId: string | null;
+  onCloseNode: () => void;
   issues: GraphIssue[];
-  mutateGraph: (fn: (g: GraphDefinition) => void) => void;
+  mutateGraph: MutateGraph;
   onDeleteNode: (id: string) => void;
   tab: string;
   onTabChange: (tab: string) => void;
 }) {
   const { draft, dirty } = useDraft();
   const [jsonOpen, setJsonOpen] = useState(false);
+  const [section, setSection] = useState<string | null>(null);
   const node = draft.graph?.nodes.find((n) => n.id === selectedId);
+  const open = setupSections.find((x) => x.id === section);
+
+  // A clicked node replaces the tabs; the back arrow (or a click on the empty canvas) returns to them.
+  if (node) {
+    return (
+      <div className="h-full overflow-y-auto px-4 py-4 scrollbar-thin @container">
+        <BackHeader title={node.id} onBack={onCloseNode} mono />
+        <NodeInspector
+          key={node.id}
+          agent={draft}
+          node={node}
+          issues={issues.filter((i) => i.nodeId === node.id)}
+          mutateGraph={mutateGraph}
+          onDelete={() => onDeleteNode(node.id)}
+        />
+      </div>
+    );
+  }
 
   return (
     <Tabs value={tab} onValueChange={onTabChange} className="flex h-full flex-col">
-      <div className="border-b px-4 pb-3 pt-4">
+      <div className="px-4 pb-2 pt-4">
         <TabsList className="flex w-full">
-          <TabsTrigger value="node">
-            <Workflow /> Node
+          <TabsTrigger value="setup" className="flex-1">
+            Agent setup
           </TabsTrigger>
-          <TabsTrigger value="setup">
-            <Settings2 /> Setup
+          <TabsTrigger value="tools" className="flex-1">
+            Tools
           </TabsTrigger>
-          <TabsTrigger value="tools">
-            <Wrench /> Tools
-          </TabsTrigger>
-          <TabsTrigger value="test">
-            <FlaskConical /> Test
+          <TabsTrigger value="test" className="flex-1">
+            Test agent
           </TabsTrigger>
         </TabsList>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-4 scrollbar-thin @container">
-        <TabsContent value="node" className="mt-0">
-          {node ? (
-            <NodeInspector
-              key={node.id}
-              agent={draft}
-              node={node}
-              issues={issues.filter((i) => i.nodeId === node.id)}
-              mutateGraph={mutateGraph}
-              onDelete={() => onDeleteNode(node.id)}
-            />
-          ) : (
-            <EmptyState
-              icon={MousePointerClick}
-              title="Select a node"
-              description="Click a node on the canvas to edit its prompt, message and edges. Drag from a node's bottom dot to connect it."
-              className="border-none shadow-none"
-            />
-          )}
-        </TabsContent>
+      <div className="flex-1 overflow-y-auto px-4 py-2 scrollbar-thin @container">
         <TabsContent value="setup" className="mt-0">
-          <Accordion type="multiple" defaultValue={["basics"]}>
-            <AccordionItem value="basics" title="Agent basics">
-              <AgentBasics mutateGraph={mutateGraph} />
-            </AccordionItem>
-            <AccordionItem value="languages" title="Languages and voice">
-              <LanguagesSection />
-            </AccordionItem>
-            <AccordionItem value="llm" title="LLM">
-              <IntelligenceSection />
-            </AccordionItem>
-            <AccordionItem value="conversation" title="Conversation settings">
-              <EngineSection />
-            </AccordionItem>
-            <AccordionItem value="calling" title="Calling">
-              <CallingSection />
-            </AccordionItem>
-            <AccordionItem value="post-call" title="Post-call">
-              <PostCallSection />
-            </AccordionItem>
-          </Accordion>
-          <Button variant="secondary" className="mt-4 w-full" onClick={() => setJsonOpen(true)}>
-            <Braces /> Advanced JSON
-          </Button>
+          {open ? (
+            <>
+              <BackHeader title={open.title} onBack={() => setSection(null)} />
+              <open.Component mutateGraph={mutateGraph} />
+            </>
+          ) : (
+            <div className="flex flex-col">
+              {setupSections.map((x) => (
+                <SetupRow key={x.id} title={x.title} onClick={() => setSection(x.id)} />
+              ))}
+              <SetupRow title="Advanced JSON" onClick={() => setJsonOpen(true)} />
+            </div>
+          )}
           <AgentJsonDialog open={jsonOpen} onOpenChange={setJsonOpen} agent={draft} />
         </TabsContent>
         <TabsContent value="tools" className="mt-0">
           <ToolsSection nodeIds={draft.graph?.nodes.map((n) => n.id)} />
         </TabsContent>
         <TabsContent value="test" className="mt-0">
-          <TestAgentPanel agent={draft} dirty={dirty} />
+          <TestAgentPanel agent={draft} dirty={dirty} buttonLabel="Get call from agent" note="Calls the last saved version." />
         </TabsContent>
       </div>
     </Tabs>

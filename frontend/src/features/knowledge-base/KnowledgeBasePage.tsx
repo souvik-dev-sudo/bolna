@@ -139,7 +139,7 @@ export function KnowledgeBasePage() {
   return (
     <>
       <PageHeader
-        title="Knowledge base"
+        title="Knowledge Base"
         description="Documents your agents can search for answers, such as FAQs, fees and doctor availability."
         actions={
           <Button onClick={() => setAddOpen(true)}>

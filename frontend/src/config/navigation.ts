@@ -27,14 +27,14 @@ export const navigation: NavGroup[] = [
   {
     label: "Build",
     items: [
-      { to: "/agents", label: "Agents", icon: Bot },
-      { to: "/graphs", label: "Graph agents", icon: GitBranch },
-      { to: "/knowledge-base", label: "Knowledge base", icon: BookOpenText },
+      { to: "/agents", label: "Agent Studio", icon: Bot },
+      { to: "/graphs", label: "Graph Agent", icon: GitBranch },
+      { to: "/knowledge-base", label: "Knowledge Base", icon: BookOpenText },
     ],
   },
   {
     label: "Monitor",
-    items: [{ to: "/calls", label: "Call history", icon: PhoneCall }],
+    items: [{ to: "/calls", label: "Call History", icon: PhoneCall }],
   },
   {
     label: "Workspace",

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 const tints: Record<string, { bg: string; fg: string; label: string }> = {
   openai: { bg: "#E9F5EF", fg: "#0B6E4F", label: "AI" },
   gemini: { bg: "#EAF1FE", fg: "#2856C9", label: "G" },
+  google: { bg: "#EAF1FE", fg: "#2856C9", label: "G" },
   sarvam: { bg: "#FFF1E8", fg: "#B4531E", label: "S" },
   cartesia: { bg: "#F1EEFE", fg: "#5B3FD1", label: "C" },
   elevenlabs: { bg: "#F1F2F4", fg: "#2B2F36", label: "XI" },

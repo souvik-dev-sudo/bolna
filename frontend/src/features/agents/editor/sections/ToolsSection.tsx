@@ -1,20 +1,20 @@
 import { useState } from "react";
-import { Code2, PencilLine, Plus, Settings2, SquareFunction, Terminal, Trash2, Wrench } from "lucide-react";
+import { ChevronsUpDown, Code2, Plus, Settings2, SquareFunction, Terminal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Field, PendingNote, SectionCard } from "@/components/form/fields";
+import { Field, InfoTip, SectionCard } from "@/components/form/fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/controls";
 import { Input, Textarea } from "@/components/ui/input";
-import { Dialog, DialogContent } from "@/components/ui/overlays";
+import { Dialog, DialogContent, Popover, PopoverContent, PopoverTrigger } from "@/components/ui/overlays";
 import { Select } from "@/components/ui/select";
 import { httpMethods, toolCatalog, type ToolKind } from "@/config/tools";
 import { parseCurl } from "@/lib/curl";
+import { cn } from "@/lib/utils";
 import { newId } from "@/services/mock";
 import type { ToolConfig } from "@/types/agent";
 import { useDraft } from "../useAgentDraft";
 
-const iconFor = (kind: ToolKind) => toolCatalog.find((t) => t.kind === kind)?.icon ?? SquareFunction;
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 
 function blankTool(kind: ToolKind): ToolConfig {
@@ -59,7 +59,7 @@ function ToolDialog({
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent
-        title={catalog?.name ?? "Custom function"}
+        title={catalog?.name ?? "Custom Function"}
         description={catalog?.description ?? "Call any HTTP API during the conversation."}
         className="max-w-2xl"
         footer={
@@ -74,7 +74,6 @@ function ToolDialog({
         }
       >
         <div className="flex flex-col gap-4">
-          {catalog?.requires && <PendingNote>{catalog.requires}. It will work once that's configured on the backend.</PendingNote>}
           <div className="grid gap-4 @xl:grid-cols-2">
             <Field label="Function name" info="What the model calls. Lowercase letters, digits and underscores." hint={!/^[a-z][a-z0-9_]*$/.test(t.name) && t.name ? "Use lowercase letters, digits and _" : undefined}>
               <Input value={t.name} onChange={(e) => set((x) => void (x.name = e.target.value))} placeholder="check_report_status" className="font-mono" />
@@ -234,8 +233,52 @@ function CurlDialog({ open, onOpenChange, onParsed }: { open: boolean; onOpenCha
   );
 }
 
-export function ToolsSection({ nodeIds }: { nodeIds?: string[] }) {
+/** Graph agents: which nodes a tool may be called on. No nodes = "Global" (every node). */
+function ToolVisibility({ tool, nodeIds, onChange }: { tool: ToolConfig; nodeIds: string[]; onChange: (nodes: string[]) => void }) {
+  const nodes = (tool.nodes ?? []).filter((n) => nodeIds.includes(n));
+  const label = nodes.length === 0 ? "Global" : nodes.length === 1 ? nodes[0] : `${nodes.length} nodes`;
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <span className="min-w-0 flex-1 truncate font-mono text-sm text-heading" title={tool.name}>
+        {tool.name}
+      </span>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="flex h-9 w-40 shrink-0 items-center justify-between gap-2 rounded-md border bg-card px-3 text-sm text-heading hover:border-border-strong"
+          >
+            <span className={cn("truncate", nodes.length === 1 && "font-mono text-xs")}>{label}</span>
+            <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-64 p-1">
+          <label className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted">
+            <Checkbox checked={nodes.length === 0} onCheckedChange={() => onChange([])} />
+            Global
+          </label>
+          <div className="my-1 h-px bg-border" />
+          <div className="max-h-64 overflow-y-auto">
+            {nodeIds.map((id) => {
+              const on = nodes.includes(id);
+              return (
+                <label key={id} className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 font-mono text-xs hover:bg-muted">
+                  <Checkbox checked={on} onCheckedChange={() => onChange(on ? nodes.filter((n) => n !== id) : [...nodes, id])} />
+                  <span className="truncate">{id}</span>
+                </label>
+              );
+            })}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+export function ToolsSection({ nodeIds: nodeIdsProp }: { nodeIds?: string[] }) {
   const { draft, patch } = useDraft();
+  // Graph agents opened in Agent Studio can still limit a tool to some nodes.
+  const nodeIds = nodeIdsProp ?? draft.graph?.nodes.map((n) => n.id);
   const [editing, setEditing] = useState<ToolConfig | null>(null);
   const [curlOpen, setCurlOpen] = useState(false);
 
@@ -252,87 +295,113 @@ export function ToolsSection({ nodeIds }: { nodeIds?: string[] }) {
   return (
     <div className="flex flex-col gap-5">
       <SectionCard
-        icon={Wrench}
-        title="Active tools"
-        description="Functions the model can call during the conversation."
-        actions={<Badge tone={draft.tools.length ? "info" : "neutral"}>{draft.tools.length} active</Badge>}
+        icon={SquareFunction}
+        title="Function Tools for LLM Models"
+        info="Functions the model can call during the conversation, e.g. to transfer the call or fetch data from your API."
       >
-        {draft.tools.length === 0 ? (
-          <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">No tools yet. Add one below.</p>
-        ) : (
-          <div className="grid gap-3 @xl:grid-cols-2">
-            {draft.tools.map((tool) => {
-              const Icon = iconFor(tool.kind);
-              return (
-                <div key={tool.id} className="flex items-center gap-3 rounded-lg border border-primary-border bg-primary-soft/40 px-4 py-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-card text-primary shadow-soft">
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-mono text-sm font-medium text-heading">{tool.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {tool.kind === "transfer_call" ? tool.transferNumber : tool.kind === "custom" ? `${tool.method} ${tool.url}` : tool.description}
-                      {tool.nodes?.length ? ` · ${tool.nodes.length} node${tool.nodes.length > 1 ? "s" : ""}` : ""}
-                    </p>
-                  </div>
-                  <Button variant="ghost" size="icon-sm" aria-label="Configure tool" onClick={() => setEditing(tool)}>
-                    <Settings2 />
-                  </Button>
-                  <Button
-                    variant="danger-ghost"
-                    size="icon-sm"
-                    aria-label="Remove tool"
-                    onClick={() => patch((d) => void (d.tools = d.tools.filter((x) => x.id !== tool.id)))}
-                  >
-                    <Trash2 />
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </SectionCard>
-
-      <SectionCard icon={Plus} title="Add a tool">
-        <div className="flex flex-col gap-3">
-          <div className="grid gap-3 @xl:grid-cols-2">
-            {toolCatalog.map((item) => (
-              <div key={item.kind} className="flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors hover:border-primary-border">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                  <item.icon className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-heading">{item.name}</p>
-                  <p className="truncate text-xs text-muted-foreground">{item.description}</p>
-                </div>
-                <Button variant="secondary" size="sm" onClick={() => setEditing(blankTool(item.kind))}>
-                  <Plus /> Add
-                </Button>
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-heading">Active Tools</h4>
+              <Badge tone={draft.tools.length ? "info" : "neutral"}>{draft.tools.length}</Badge>
+            </div>
+            {draft.tools.length === 0 ? (
+              <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">No tools yet. Add one below.</p>
+            ) : (
+              <div className="grid gap-3 @xl:grid-cols-2">
+                {draft.tools.map((tool) => {
+                  const catalog = toolCatalog.find((t) => t.kind === tool.kind);
+                  return (
+                    <div key={tool.id} className="flex items-center gap-3 rounded-lg border border-primary bg-primary-soft/40 px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 text-sm font-medium text-heading">
+                          <span className={cn("truncate", !catalog && "font-mono")}>{catalog?.name ?? tool.name}</span>
+                          {tool.description && <InfoTip text={tool.description} />}
+                        </div>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {tool.kind === "transfer_call" ? tool.transferNumber : `${tool.method} ${tool.url}`}
+                          {tool.nodes?.length ? ` · ${tool.nodes.length} node${tool.nodes.length > 1 ? "s" : ""}` : ""}
+                        </p>
+                      </div>
+                      <Button variant="ghost" size="icon-sm" aria-label="Configure tool" onClick={() => setEditing(tool)}>
+                        <Settings2 />
+                      </Button>
+                      <Button
+                        variant="danger-ghost"
+                        size="icon-sm"
+                        aria-label="Remove tool"
+                        onClick={() => patch((d) => void (d.tools = d.tools.filter((x) => x.id !== tool.id)))}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
-          <div className="flex flex-col gap-3 rounded-lg border border-dashed px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-md bg-primary-soft text-primary">
-                <SquareFunction className="h-4 w-4" />
-              </span>
+
+          <div className="flex flex-col gap-3">
+            <h4 className="text-sm font-semibold text-heading">Add Tool</h4>
+            <div className="grid gap-3 @xl:grid-cols-2">
+              {toolCatalog.map((item) => (
+                <div key={item.kind} className="flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors hover:border-primary-border">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-heading">{item.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">{item.description}</p>
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={() => setEditing(blankTool(item.kind))}>
+                    <Plus /> Add
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <h4 className="text-sm font-semibold text-heading">Add a Custom Tool</h4>
+            <div className="flex flex-col gap-3 rounded-lg border px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-medium text-heading">Custom function</p>
+                <p className="text-sm font-medium text-heading">Custom Function</p>
                 <p className="text-xs text-muted-foreground">Connect any API endpoint</p>
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setEditing(blankTool("custom"))}>
-                <PencilLine /> Write manually
-              </Button>
-              <span className="text-xs text-muted-foreground">or</span>
-              <Button variant="secondary" size="sm" onClick={() => setCurlOpen(true)}>
-                <Terminal /> From cURL
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setEditing(blankTool("custom"))}>
+                  Write manually
+                </Button>
+                <span className="text-xs text-muted-foreground">or</span>
+                <Button variant="secondary" size="sm" onClick={() => setCurlOpen(true)}>
+                  <Terminal /> Generate from cURL
+                </Button>
+              </div>
             </div>
           </div>
         </div>
       </SectionCard>
+
+      {nodeIds && nodeIds.length > 0 && draft.tools.length > 0 && (
+        <div className="flex flex-col gap-3 px-1">
+          <div>
+            <h4 className="text-sm font-semibold text-heading">Tool visibility</h4>
+            <p className="text-xs text-muted-foreground">Limit each tool to specific nodes so it is only callable where it makes sense.</p>
+          </div>
+          <div className="divide-y rounded-lg border">
+            {draft.tools.map((tool) => (
+              <ToolVisibility
+                key={tool.id}
+                tool={tool}
+                nodeIds={nodeIds}
+                onChange={(nodes) =>
+                  patch((d) => {
+                    const t = d.tools.find((x) => x.id === tool.id);
+                    if (t) t.nodes = nodes;
+                  })
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {editing && <ToolDialog key={editing.id} tool={editing} onClose={() => setEditing(null)} onSave={save} nodeIds={nodeIds} />}
       <CurlDialog

@@ -27,7 +27,6 @@ export function languageName(code: string) {
 
 /** When the agent may switch away from its starting language. */
 export const languageSwitchModes = [
-  { value: "auto", label: "requested or auto-detected" },
-  { value: "requested", label: "only when requested" },
-  { value: "never", label: "never (stay in the default)" },
+  { value: "auto", label: "requested or auto detected" },
+  { value: "requested", label: "requested" },
 ] as const;

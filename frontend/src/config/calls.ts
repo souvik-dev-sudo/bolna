@@ -41,17 +41,28 @@ export const hangupBy: Record<HangupBy, string> = {
   system: "System",
 };
 
-/** Bolna's hangup reasons, with readable labels. */
+/** Termination reasons stored by bolna-app (the engine's HangupReason, plus the unanswered states). */
 export const terminationReasons: Record<string, string> = {
   user_hangup: "Caller hung up",
   llm_prompted_hangup: "Agent ended the call",
-  silence_timeout: "Caller went silent",
-  call_timeout: "Call time limit reached",
+  end_call_tool: "Agent ended the call",
+  inactivity_timeout: "Caller went silent",
+  max_duration_reached: "Call time limit reached",
+  web_call_max_duration_reached: "Call time limit reached",
   voicemail_detected: "Voicemail detected",
   transferred: "Transferred to a human",
+  client_disconnected: "Line disconnected",
+  transcriber_error: "Transcriber error",
+  transcriber_connection_error: "Transcriber error",
+  synthesizer_error: "Voice error",
+  llm_error: "LLM error",
   no_answer: "Not answered",
   busy: "Line busy",
+  canceled: "Canceled",
   error: "Error",
 };
+
+/** Telephony providers that can appear in Call History. */
+export const callProviders: Record<string, string> = { plivo: "Plivo" };
 
 export const voicemailIcon = Voicemail;

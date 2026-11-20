@@ -1,5 +1,5 @@
 import { useState, type ComponentType, type KeyboardEvent } from "react";
-import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
   BrainCircuit,
@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { EmptyState } from "@/components/EmptyState";
 import { Breadcrumbs } from "@/components/layout/PageHeader";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/misc";
 import { Sheet, SheetContent } from "@/components/ui/overlays";
 import { useDeleteAgent, useDuplicateAgent } from "@/hooks/queries";
@@ -50,7 +51,7 @@ interface SectionDef {
 export const sections: SectionDef[] = [
   {
     id: "prompt",
-    label: "Prompt",
+    label: "Agent",
     icon: FileText,
     description: "Greeting, instructions and when to hang up",
     Component: PromptSection,
@@ -61,17 +62,17 @@ export const sections: SectionDef[] = [
           ? "Write the agent prompt"
           : null,
   },
-  { id: "intelligence", label: "Intelligence", icon: BrainCircuit, description: "Model and knowledge", Component: IntelligenceSection },
+  { id: "intelligence", label: "Intelligence", icon: BrainCircuit, description: "Model and parameters", Component: IntelligenceSection },
   {
     id: "languages",
-    label: "Languages & voice",
+    label: "Languages",
     icon: Languages,
     description: "Voices and speech recognition per language",
     Component: LanguagesSection,
     check: (a) => (a.languages.some((l) => !l.voice.voiceId) ? "Pick a voice for every language" : null),
   },
   { id: "calling", label: "Calling", icon: PhoneCall, description: "Telephony and call handling", Component: CallingSection },
-  { id: "engine", label: "Conversation", icon: Cog, description: "Timing, interruptions and limits", Component: EngineSection },
+  { id: "engine", label: "Engine", icon: Cog, description: "Timing, interruptions and limits", Component: EngineSection },
   {
     id: "tools",
     label: "Tools",
@@ -79,7 +80,7 @@ export const sections: SectionDef[] = [
     description: "Functions the agent can call",
     Component: ToolsSection,
   },
-  { id: "post-call", label: "Post-call", icon: ListChecks, description: "Webhook, summary and extraction", Component: PostCallSection },
+  { id: "post-call", label: "Extractions", icon: ListChecks, description: "Webhook, summary and extraction", Component: PostCallSection },
 ];
 
 /** Section tabs: a vertical list on desktop, a horizontal scrollable row on small screens. */
@@ -160,7 +161,7 @@ function EditorBody() {
   return (
     <>
       <div className="mb-4">
-        <Breadcrumbs items={[{ label: "Agents", to: "/agents" }, { label: draft.name || "Untitled" }]} />
+        <Breadcrumbs items={[{ label: "Agent Studio", to: "/agents" }, { label: draft.name || "Untitled" }]} />
       </div>
       <AgentHeader
         onTest={() => setTestOpen(true)}
@@ -193,12 +194,18 @@ function EditorBody() {
             <p className="text-sm text-muted-foreground">{current.description}</p>
           </div>
           <current.Component />
-          <SaveBar />
+          <SaveBar
+            extra={
+              <Button variant="secondary" onClick={() => setTestOpen(true)}>
+                <PhoneCall /> Get a call from agent
+              </Button>
+            }
+          />
         </section>
       </div>
 
       <Sheet open={testOpen} onOpenChange={setTestOpen}>
-        <SheetContent title="Test agent" description={draft.name} className="max-w-md">
+        <SheetContent title="Get a call from agent" description={draft.name} className="max-w-md">
           <div className="p-5">
             <TestAgentPanel agent={draft} dirty={dirty} />
           </div>
@@ -249,7 +256,6 @@ export function AgentEditorPage() {
       </div>
     );
   }
-  if (value.draft.kind === "graph") return <Navigate to={`/graphs/${value.draft.id}`} replace />;
   return (
     <AgentDraftProvider value={value}>
       <EditorBody />

@@ -361,20 +361,18 @@
             }
           },
           "transcriber": {
-            "provider": "gemini",
-            "model": "gemini-3.5-transcribe-live-preview",
-            "language": "en",
+            "provider": "sarvam",
+            "model": "saaras:v3",
+            "language": "en-IN",
             "stream": true,
             "encoding": "linear16",
-            "endpointing": 300,
             "multilingual": {
               "en": {
-                "provider": "gemini",
-                "model": "gemini-3.5-transcribe-live-preview",
-                "language": "en",
+                "provider": "sarvam",
+                "model": "saaras:v3",
+                "language": "en-IN",
                 "stream": true,
-                "encoding": "linear16",
-                "endpointing": 300
+                "encoding": "linear16"
               },
               "hi": {
                 "provider": "sarvam",

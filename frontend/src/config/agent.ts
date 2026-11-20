@@ -30,10 +30,10 @@ export function defaultLanguageSettings(code: string): LanguageSettings {
     code,
     voice: indic
       ? { provider: "sarvam", model: "bulbul:v3", voiceId: "ritu" }
-      : { provider: "cartesia", model: "sonic-3", voiceId: "cartesia-aanya" },
-    transcriber: indic
-      ? { provider: "sarvam", model: "saaras:v3", keywords: "", context: "" }
-      : { provider: "gemini", model: "gemini-3.5-transcribe-live-preview", keywords: "", context: "" },
+      : { provider: "cartesia", model: "sonic-3", voiceId: "ce45ddca-5f4b-4047-ada3-3fce2bc78acd" }, // Kavya (Indian English)
+    // Sarvam for every language: Gemini speech-to-text needs Vertex (Google Cloud) credentials,
+    // which only the VM has, so a Gemini default breaks new agents on local runs.
+    transcriber: { provider: "sarvam", model: "saaras:v3", keywords: "", context: "" },
     handIn: { agentName: "", message: "" },
   };
 }
@@ -58,19 +58,9 @@ export function newAgentForm(kind: AgentForm["kind"] = "simple", name = "Untitle
     languageSwitchMode: "auto",
     calling: {
       telephonyProvider: "plivo",
-      ambientNoise: "none",
-      noiseCancellation: false,
       voicemailDetection: false,
       voicemailSeconds: 30,
       dtmf: false,
-      inbound: { enabled: false, number: "" },
-      callingHours: {
-        enabled: false,
-        start: "09:00",
-        end: "19:00",
-        days: ["mon", "tue", "wed", "thu", "fri", "sat"],
-        timezone: "Asia/Kolkata",
-      },
     },
     engine: {
       linearDelayMs: 200,
@@ -82,7 +72,7 @@ export function newAgentForm(kind: AgentForm["kind"] = "simple", name = "Untitle
       callTimeoutSeconds: 420,
     },
     tools: [],
-    webhook: { url: "", headersEnabled: false, headers: [], statuses: [] },
+    webhook: { url: "", headersEnabled: false, headers: [] },
     extractions: { summary: true, categories: [] },
     graph:
       kind === "graph"

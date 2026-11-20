@@ -180,7 +180,7 @@ export function LanguageChips({
             <span className={cn("h-1.5 w-1.5 rounded-full", filled[code]?.trim() ? "bg-success" : "bg-border-strong")} />
           )}
           {languageName(code)}
-          {code === defaultCode && <span className="text-[10px] opacity-70">default</span>}
+          {code === defaultCode && <span className="text-[10px] opacity-70">(Default)</span>}
         </button>
       ))}
     </div>

@@ -26,7 +26,7 @@ export function SaveBar({ extra }: { extra?: ReactNode }) {
               <span className="font-medium text-heading">Unsaved changes</span>
             </>
           ) : (
-            <span className="text-muted-foreground">All changes saved · updated {relativeTime(saved.updatedAt)}</span>
+            <span className="text-muted-foreground">Updated {relativeTime(saved.updatedAt)}</span>
           )}
         </div>
         <div className="flex items-center gap-2">
