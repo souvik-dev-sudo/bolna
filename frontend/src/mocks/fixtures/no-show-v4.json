@@ -1,0 +1,467 @@
+{
+  "agent_config": {
+    "agent_name": "No-Show v4 (multilingual)",
+    "agent_type": "graph_agent",
+    "agent_welcome_message": "Good morning. I am Kavya from Dr. Agarwal's Eye Hospital. Preferred language - English, Hindi or Tamil?",
+    "tasks": [
+      {
+        "task_type": "conversation",
+        "toolchain": {
+          "execution": "parallel",
+          "pipelines": [
+            [
+              "transcriber",
+              "llm",
+              "synthesizer"
+            ]
+          ]
+        },
+        "task_config": {
+          "voicemail": false,
+          "use_fillers": false,
+          "dtmf_enabled": false,
+          "ambient_noise": false,
+          "backchanneling": false,
+          "call_terminate": 300,
+          "optimize_latency": true,
+          "incremental_delay": 200,
+          "check_if_user_online": true,
+          "hangup_after_LLMCall": false,
+          "hangup_after_silence": 15,
+          "call_cancellation_prompt": null,
+          "voicemail_check_interval": 7,
+          "check_user_online_message": {
+            "en": "Hello, are you still on the line?",
+            "hi": "Hello, क्या आप अभी भी लाइन पर हैं?",
+            "ta": "Hello, நீங்க இன்னும் line-ல இருக்கீங்களா?"
+          },
+          "backchanneling_message_gap": 5,
+          "backchanneling_start_delay": 5,
+          "interruption_backoff_period": 0,
+          "interruptible_hangup_message": false,
+          "voicemail_detection_duration": 30,
+          "voicemail_min_transcript_length": 7,
+          "number_of_words_for_interruption": 3,
+          "trigger_user_online_message_after": 10
+        },
+        "tools_config": {
+          "input": {
+            "format": "wav",
+            "provider": "plivo"
+          },
+          "output": {
+            "format": "wav",
+            "provider": "plivo"
+          },
+          "api_tools": {
+            "tools": [
+              {
+                "type": "function",
+                "function": {
+                  "name": "transfer_call_919330724843",
+                  "description": "Use this tool to transfer the call",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "call_sid"
+                    ],
+                    "properties": {
+                      "call_sid": {
+                        "type": "string",
+                        "description": "unique call id"
+                      }
+                    }
+                  },
+                  "strict": false
+                }
+              }
+            ],
+            "tools_params": {
+              "transfer_call_919330724843": {
+                "url": null,
+                "method": "POST",
+                "param": {
+                  "call_sid": "%(call_sid)s",
+                  "call_transfer_number": "+919330724843"
+                },
+                "headers": {},
+                "api_token": null,
+                "pre_call_message": "Sure, I'll transfer the call for you. Please wait a moment",
+                "scope": "node",
+                "nodes": [
+                  "Transfer"
+                ]
+              }
+            }
+          },
+          "llm_agent": {
+            "agent_type": "graph_agent",
+            "agent_flow_type": "streaming",
+            "llm_config": {
+              "provider": "openai",
+              "family": "openai",
+              "model": "gpt-4o-mini",
+              "max_tokens": 250,
+              "temperature": 0.3,
+              "top_p": 0.9,
+              "min_p": 0.1,
+              "top_k": 0,
+              "presence_penalty": 0,
+              "frequency_penalty": 0,
+              "request_json": false,
+              "use_responses_api": false,
+              "routing_provider": "openai",
+              "routing_model": "gpt-4.1-mini",
+              "routing_max_tokens": 50,
+              "current_node_id": "Start",
+              "context_data": {
+                "recipient_data": {
+                  "name": "Rahul",
+                  "tag": "Sir",
+                  "doctor": "Doctor Amod Nayak",
+                  "missed_date": "the twenty second of September",
+                  "missed_time": "ten thirty AM",
+                  "branch": "Anna Nagar",
+                  "timezone": "Asia/Kolkata"
+                }
+              },
+              "agent_information": "You are Kavya, patient services at Dr. Agarwal's Eye Hospital, Chennai.\nThis is an OUTBOUND call — you rang them, they were not expecting you.\nOne or two sentences a turn, never more.\n\nLANGUAGE\nReply in the language they are speaking. If they named one, use that. If they\ndid not, the language of their words is the answer. Only when you truly cannot\ntell — silence, noise, garbled text — use Tamil. Never ask again, and follow\nthem without comment if they switch mid-call.\nEach step gives the same line in English, Hindi and Tamil. Pick the one that\nmatches them. Never pick Tamil by default.\n\nNUMBERS — ENGLISH WORDS, NEVER NUMERALS\n\"ten thirty AM\", \"the tenth\", \"Monday\", \"nine, seven, eight\".\nNever write a numeral. The voice reads numerals in Tamil.\n\nSAY THE LINE YOU ARE GIVEN\nEach step gives you a line. Say it as written. Never improve it, never\nreorder the steps, never add a step, never skip one.\n\nYOU ARE NOT A DOCTOR\nNever name or confirm a condition, interpret a symptom or a report, or quote\na price. Never invent a doctor, branch, slot or policy. Those, and anything\nabout bills, refunds, insurance or records, go to a person.\n\nADDRESS\nNever read out a branch address. If they ask where a branch is, say the address\nwill be sent to them on WhatsApp.\n\nNEVER ASK THE SAME THING TWICE\nUnclear once, ask again more simply. Unclear twice, move on.",
+              "routing_instructions": "Outbound no-show follow-up. The call starts at Notify.\n\nMEDICAL OVERRIDE, from any node. If they describe a problem they have right\nnow, or ask you anything medical, route to Transfer at once — it beats every\nother route. Urgent especially: sudden loss of vision, severe eye pain, an\ninjury, something in the eye, sudden flashes or floaters, a shadow across the\nvision, or trouble after a recent operation.\nExplaining why they missed the appointment is not this. A past illness is a\nreason, not a request.\n",
+              "nodes": [
+                {
+                  "id": "Start",
+                  "node_type": "router",
+                  "prompt": "",
+                  "edges": [
+                    {
+                      "to_node_id": "Notify",
+                      "condition": "",
+                      "condition_type": "unconditional"
+                    }
+                  ]
+                },
+                {
+                  "id": "Notify",
+                  "node_type": "llm",
+                  "prompt": "LANGUAGE — decide from their reply, in this order:\n1. They NAMED a language — use that one, in whatever script it reached you.\n   The recogniser sometimes writes English or Hindi words in Tamil letters.\n2. They did not name one, but spoke in English, Hindi or Tamil — reply in the\n   language they spoke. What language their words are in IS the answer,\n   whatever those words happen to be. Most people just start talking rather\n   than choosing.\n3. Only if you truly cannot tell — silence, noise, a garbled transcript —\n   use Tamil.\nNever ask the language again.\n\nSAY THIS, then stop and wait:\nen  \"{name} {tag}, as per our records you weren't able to come in for your appointment on {missed_date} at our {branch} branch. May I know the reason?\"\nta  \"{name} {tag}, எங்க records-ல {missed_date} {branch} branch appointment-க்கு நீங்க வரலைன்னு இருக்கு. காரணம் சொல்ல முடியுமா?\"\nhi  \"{name} {tag}, हमारे records में है कि {missed_date} को {branch} branch के appointment पर आप नहीं आ पाए। कारण बता सकते हैं?\"\n\nTHE APPOINTMENT ON THEIR RECORD — this is everything you know about it:\n  doctor  {doctor}\n  date    {missed_date}\n  branch  {branch}\nIf they ask which doctor, when it was, or ask you to say it all again, answer\nfrom those three and say your line again in the SAME turn.\nYou do not know what the appointment was for, and you have no other doctor's\nname. If the doctor line is blank, say the record does not name one.\nNever guess either.\n\nIF THEY ASK ABOUT THE CALL ITSELF — who you are, where you are calling from,\nhow you got their number, whether you are a person or an AI — answer in a few\nwords and say your line in the SAME turn.\nYou are Kavya, from Dr. Agarwal's Eye Hospital. Their number is on their\npatient record with us. You ARE an AI assistant: say so plainly if asked, and\nnever deny it or dodge the question.\nNever answer and stop.\n\nNEVER INVENT A LINE. No acknowledgement, no thank-you, no apology, no offer,\nno closing of your own. If you have nothing new to say, say your line again.\n",
+                  "examples": {
+                    "en": "Hi Rahul Sir, you missed your appointment on 22 September at Anna nagar branch",
+                    "ta": "{name} {tag}, {missed_date} {missed_time}-க்கு {branch} branch-ல உங்க appointment miss ஆயிடுச்சு."
+                  },
+                  "edges": [
+                    {
+                      "to_node_id": "Languages_Offered",
+                      "condition": "They ask what languages you speak, without naming one",
+                      "label": "Languages Offered?"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "They ask for, or say they want, a language that is NOT English, Hindi or Tamil — Telugu, Kannada, Malayalam, Bengali, Marathi, anything else. Answering the greeting with English, Hindi or Tamil is NOT this edge",
+                      "label": "Other Languages",
+                      "function_name": "transfer_other_language"
+                    },
+                    {
+                      "to_node_id": "Immediate_Close",
+                      "condition": "The person on the line says this is the wrong number, or the caller says he did not book any appointment, or is unknown to them, or they are NOT interested to talk",
+                      "label": "Wrong Number",
+                      "function_name": "close_wrong_number"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "The callers demands for a human or a real person or a real agent",
+                      "label": "Human Agent",
+                      "function_name": "transfer_human_agent"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "They are telling you about a medical problem they have , or asking you a\nmedical question — what something is, whether it is serious, what to do\nabout it, what a report says, what medicine or drops to use.",
+                      "label": "Medical Problem",
+                      "function_name": "transfer_medical_problem"
+                    },
+                    {
+                      "to_node_id": "Immediate_Close",
+                      "condition": "The caller mentions they never booked an appointment.",
+                      "label": "Never Booked",
+                      "function_name": "close_never_booked"
+                    },
+                    {
+                      "to_node_id": "Already_Booked",
+                      "condition": "They say they have already booked or rescheduled another appointment or they have already visited",
+                      "label": "Already Booked"
+                    },
+                    {
+                      "to_node_id": "Reschedule_Date_Time",
+                      "condition": "They caller has asked to reschedule",
+                      "label": "Asked to Reschedule"
+                    },
+                    {
+                      "to_node_id": "Reason",
+                      "condition": "They say a reason for not coming, AFTER being asked the reason. Language selection does not count as a reason.",
+                      "label": "Reason",
+                      "function_name": "reason_given"
+                    },
+                    {
+                      "to_node_id": "Reason",
+                      "condition": "They refuse to say why, or say the reason is private, after being asked the reason.",
+                      "label": "Decline",
+                      "function_name": "reason_declined"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "They say the cost is too much, or that they cannot afford it.",
+                      "label": "Cost",
+                      "function_name": "transfer_cost"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "The caller said he/she went to the hospital but was turned away or booking was not confirmed",
+                      "label": "Turned away",
+                      "function_name": "transfer_turned_away"
+                    }
+                  ]
+                },
+                {
+                  "id": "Notify_Language",
+                  "node_type": "llm",
+                  "prompt": "The greeting has asked which language they prefer. If they have not answered\nclearly, ask once more and stop:\nen  \"English, Hindi, or Tamil?\"\nta  \"English, Hindi, இல்ல Tamil — எந்த language வசதி?\"\nhi  \"English, Hindi, या Tamil — कौन सी भाषा?\"\n\nSay nothing else. No greeting, no appointment details, no apology.\n",
+                  "edges": [
+                    {
+                      "to_node_id": "Notify",
+                      "condition": "They reply to the greeting — naming a language, speaking in one, or saying anything at all.",
+                      "label": "Language"
+                    },
+                    {
+                      "to_node_id": "Languages_Offered",
+                      "condition": "They ask what languages you speak, without naming one",
+                      "label": "Langauge Offered"
+                    },
+                    {
+                      "to_node_id": "Immediate_Close",
+                      "condition": "The person on the line says this is the wrong number, or the caller says he did not book any appointment, or is unknown to them, or they are NOT interested to talk",
+                      "label": "Wrong Number"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "They are telling you about a medical problem they have , or asking you a\nmedical question — what something is, whether it is serious, what to do\nabout it, what a report says, what medicine or drops to use.",
+                      "label": "Medical",
+                      "function_name": "lang_transfer_medical"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "They ask for, or say they want, a language that is NOT English, Hindi or Tamil — Telugu, Kannada, Malayalam, Bengali, Marathi, anything else. Answering the greeting with English, Hindi or Tamil is NOT this edge",
+                      "label": "Other Language",
+                      "function_name": "lang_transfer_other_language"
+                    }
+                  ]
+                },
+                {
+                  "id": "Languages_Offered",
+                  "node_type": "static",
+                  "prompt": "",
+                  "static_message": {
+                    "en": "English, Hindi, or Tamil?",
+                    "hi": "English, Hindi, या Tamil — कौन सी भाषा?",
+                    "ta": "English, Hindi, இல்ல Tamil — எந்த language வசதி?"
+                  },
+                  "edges": [
+                    {
+                      "to_node_id": "Notify",
+                      "condition": "",
+                      "condition_type": "unconditional"
+                    }
+                  ]
+                },
+                {
+                  "id": "Transfer",
+                  "node_type": "llm",
+                  "prompt": "Call the transfer tool.",
+                  "function_call": "transfer_call_919330724843",
+                  "edges": []
+                },
+                {
+                  "id": "Reason",
+                  "node_type": "llm",
+                  "prompt": "SAY THIS, then stop and wait:\nen  \"I understand. Would you like to reschedule?\"\nta  \"புரியுது. Reschedule பண்ணலாமா?\"\nhi  \"समझ गई। क्या reschedule कर लें?\"\n\nTHE APPOINTMENT THEY MISSED — if they ask about it again, answer from this and\nsay your line again in the SAME turn:\n  doctor  {doctor}\n  date    {missed_date}\n  branch  {branch}\nYou do not know what it was for. Never guess.\n\nIF THEY ASK ABOUT THE CALL ITSELF — who you are, whether you are a person or\nan AI — answer in a few words and carry on in the same turn. You are Kavya,\nfrom Dr. Agarwal's Eye Hospital. You ARE an AI assistant: say so plainly.\n\nNEVER INVENT A LINE. No acknowledgement beyond the line above, no apology, no\noffer of your own. If you have nothing new to say, say your line again.\n",
+                  "edges": [
+                    {
+                      "to_node_id": "Reschedule_Date_Time",
+                      "condition": "They engage with booking a new appointment — they agree to reschedule, name a\ndate, time or branch, or ask what is available, which slots there are, what it\nwill cost, or whether a particular doctor can see them.",
+                      "label": "Agree Reschedule"
+                    },
+                    {
+                      "to_node_id": "Immediate_Close",
+                      "condition": "The caller declines to reschedule or is not interested or went to another hospital",
+                      "label": "Declines to reschedule"
+                    },
+                    {
+                      "to_node_id": "Already_Booked",
+                      "condition": "They say they have already booked or rescheduled another appointment or they have already visited",
+                      "label": "Already Booked"
+                    }
+                  ]
+                },
+                {
+                  "id": "Immediate_Close",
+                  "node_type": "static",
+                  "prompt": "",
+                  "edges": [],
+                  "static_message": {
+                    "en": "We hope to serve you soon. Thank you.",
+                    "hi": "तकलीफ़ के लिए माफ़ कीजिए। धन्यवाद।",
+                    "ta": "தொந்தரவுக்கு மன்னிச்சுக்கங்க. நன்றி."
+                  }
+                },
+                {
+                  "id": "Already_Booked",
+                  "node_type": "static",
+                  "prompt": "",
+                  "edges": [],
+                  "static_message": {
+                    "en": "Thank you. Could you please provide the mobile number used for check-in?",
+                    "hi": "धन्यवाद। Check-in के लिए इस्तेमाल किया हुआ mobile number बता सकते हैं?",
+                    "ta": "நன்றி. Check-in பண்ணப்ப கொடுத்த mobile number சொல்ல முடியுமா?"
+                  }
+                },
+                {
+                  "id": "Reschedule_Date_Time",
+                  "node_type": "llm",
+                  "prompt": "Collect three things: DATE, TIME, BRANCH. Ask only for what is still missing,\nnever for something they have already given. They may give two or three at\nonce — take them all.\nBranch is {branch}, the one on their record. Do not ask for it again unless\nthey say that branch does not suit them.\n\nSAY THIS when you arrive here, then stop and wait:\nen  \"What date, time, and branch would work for you?\"\nta  \"எந்த date, time, எந்த branch வசதியா இருக்கும்?\"\nhi  \"कौन सी date, time और branch आपको ठीक रहेगी?\"\n\nIf they arrived here by asking something, answer that FIRST and then ask for\nwhat is missing, in the same turn. Never reply to a question with only a\nquestion.\n\nEVERY DATE AND TIME COMES FROM YOUR KNOWLEDGE BASE\nNever name a day or a time that is not in it. Offer two at a time, never a\nlist. Always say the day and the time together.\nA slot you have offered IS available. Never tell them a time you just offered\nis taken.\n\nIF THEY DO NOT NAME A SPECIFIC DAY OR TIME — \"any day\", \"this week\",\n\"whenever\", \"after five\", \"morning\", \"evening\" — take the EARLIEST slot in\nyour knowledge base that fits what they said, offer that one, and ask them to\nconfirm it. Never leave it open and never ask them to choose again.\n\nSUNDAY — every branch is closed on Sunday. Say so and offer the next working\nday.\n\nONCE ALL THREE ARE SETTLED, read the three back together and ask if that is\nright. If they want to change the day, the time or the branch, change that one,\nkeep the other two, and read all three back again.\n\nFIXED ANSWERS — say these as written:\n- How long it takes, whether someone should come, whether they can drive home:\n  \"Please arrive one hour early; the exam typically takes two hours. You\n  cannot drive after the exam, so please bring someone with you.\"\n- Whether they can come alone:\n  \"You should not drive yourself afterwards. Coming alone is fine if you book\n  a cab or an auto for the way back.\"\n- Which branch is nearest, or which one to come to: \"Anna Nagar.\"\n- What the consultation costs: \"Eight hundred rupees, paid at registration.\"\n\nA DOCTOR QUESTION ALWAYS GETS AN ANSWER ABOUT THAT DOCTOR. Name the doctor for\nthat branch from your knowledge base and say which branch they sit at. Never\nsay you will check, never say a doctor does not exist, never name a second\ndoctor for one branch.\n\nNAMING A SLOT IS NOT BOOKING IT. Never say the appointment is confirmed.\nRead every date and time in words, never as numerals.\n\nIF THEY ASK ABOUT THE CALL ITSELF — who you are, whether you are a person or\nan AI — answer in a few words and carry on in the same turn. You are Kavya,\nfrom Dr. Agarwal's Eye Hospital. You ARE an AI assistant: say so plainly.\n\nIf they give a name, an age or a phone number here, do not acknowledge it and\ndo not ask about it. Carry on with date, time and branch.\n\nNEVER INVENT A LINE. No acknowledgement, no apology, no offer of your own.\nIf you have nothing new to say, ask again for what is still missing.\n\n## YOUR KNOWLEDGE BASE\nOPD HOURS\nBranches are open Monday to Saturday, from eight in the morning to eight at night. Sunday is the only closed day; every other day is a working day.\nAppointments are every thirty minutes. The first is at eight in the morning and the last is at half past seven in the evening.\n\nBRANCHES AND DOCTORS\nThere is one doctor at each branch, and that is the only doctor for that branch.\nAnna Nagar: Doctor Amod Nayak, Senior Consultant, Cataract and Refractive Surgery. Sits only at Anna Nagar.\nAlwarpet: Doctor Meera Raghavan, Consultant, Glaucoma and Comprehensive Ophthalmology. Sits only at Alwarpet.\nEgmore: Doctor Karthik Venkatesan, Consultant, Retina. Sits only at Egmore.\nEvery slot listed below is open at every branch, so a branch's doctor is free at any of those times on any working day.\n\nTHE NEXT TWO WORKING DAYS\nMonday, the twenty-eighth of September: half past eight in the morning, ten in the morning, half past eleven in the morning, one in the afternoon, half past four in the evening, half past six in the evening.\nTuesday, the twenty-ninth of September: nine in the morning, half past ten in the morning, noon, half past two in the afternoon, four in the evening, half past five in the evening, seven in the evening.\n\nFROM WEDNESDAY ONWARDS\nFrom Wednesday, the thirtieth of September onwards, every half-hour slot is open at every branch on every working day, between eight in the morning and half past seven in the evening.\n\nEARLIEST SLOT FOR A PART OF THE DAY\nMonday the twenty-eighth of September: morning half past eight in the morning; afternoon one in the afternoon; evening (including anything after five) half past six in the evening.\nTuesday the twenty-ninth of September: morning nine in the morning; afternoon noon; evening (including anything after five) half past five in the evening.\nFrom Wednesday the thirtieth of September onwards: morning eight in the morning; afternoon noon; evening (including anything after five) five in the evening.",
+                  "edges": [
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "A medical problem they have now, or a medical question.",
+                      "label": "Medical",
+                      "function_name": "resched_transfer_medical"
+                    },
+                    {
+                      "to_node_id": "Transfer",
+                      "condition": "They say the cost is too much, or that they cannot afford it.",
+                      "label": "Cost",
+                      "function_name": "resched_transfer_cost"
+                    },
+                    {
+                      "to_node_id": "Immediate_Close",
+                      "condition": "They say plainly that they no longer want an appointment.",
+                      "label": "Reject Appointment"
+                    },
+                    {
+                      "to_node_id": "Patient_Name_Age",
+                      "condition": "You have read the day, the time and the branch back together, and they say it\nis right.",
+                      "label": "Name Age"
+                    }
+                  ]
+                },
+                {
+                  "id": "Patient_Name_Age",
+                  "node_type": "llm",
+                  "prompt": "Collect two things: the Patient Name and the Patient Age. Ask only for what is\nstill missing.\n\nSAY THIS when you arrive here, then stop and wait:\nen  \"Could I have the Patient Name and Patient Age?\"\nhi  \"Patient Name और Patient Age बता सकते हैं?\"\nta  \"Patient Name-உம் Patient Age-உம் சொல்ல முடியுமா?\"\n\nALWAYS SAY \"Patient Name\" AND \"Patient Age\" IN ENGLISH, in every language, every\ntime. Never translate either one into Hindi or Tamil. The words around them stay\nin the language you are speaking.\n\nIF THEY ALREADY GAVE A NAME OR AN AGE EARLIER IN THIS CALL, do not ask for it\nagain. Read back what they said and ask if it is right. Ask only for whichever\none is still missing.\n\nSPELLING — if they say a name and then letters, those letters are that same name\nbeing spelled out for you. Take the spelling as the correct one. The letters may\nreach you spaced apart, with full stops between them, or written out as sounds.\nThey are one name. They are never a second name and never an age.\nSay the name back as a word, never letter by letter.\nIf you could not make out a name at all, ask them to spell it.\n\nSay the age back in words, never as a numeral.\n\nONCE YOU HAVE BOTH, read them back together and ask if that is right. If they\ncorrect either one, change that one, keep the other, and read both back again.\n\nIF THEY ASK ABOUT THE CALL ITSELF — who you are, whether you are a person or an\nAI — answer in a few words and carry on in the same turn. You are Kavya, from\nDr. Agarwal's Eye Hospital. You ARE an AI assistant: say so plainly.\n\nNEVER INVENT A LINE. No acknowledgement, no apology, no offer of your own.\nIf you have nothing new to say, ask again for what is still missing.\n",
+                  "edges": []
+                }
+              ]
+            }
+          },
+          "transcriber": {
+            "provider": "sarvam",
+            "model": "saaras:v3",
+            "language": "en-IN",
+            "stream": true,
+            "encoding": "linear16",
+            "multilingual": {
+              "en": {
+                "provider": "sarvam",
+                "model": "saaras:v3",
+                "language": "en-IN",
+                "stream": true,
+                "encoding": "linear16"
+              },
+              "hi": {
+                "provider": "sarvam",
+                "model": "saaras:v3",
+                "language": "hi-IN",
+                "stream": true,
+                "encoding": "linear16"
+              },
+              "ta": {
+                "provider": "sarvam",
+                "model": "saaras:v3",
+                "language": "ta-IN",
+                "stream": true,
+                "encoding": "linear16"
+              }
+            },
+            "active": "en"
+          },
+          "synthesizer": {
+            "provider": "sarvam",
+            "stream": true,
+            "caching": true,
+            "buffer_size": 40,
+            "audio_format": "wav",
+            "provider_config": {
+              "voice": "Suhani",
+              "voice_id": "suhani",
+              "model": "bulbul:v3",
+              "language": "en-IN",
+              "speed": 1
+            },
+            "multilingual": {
+              "en": {
+                "provider": "sarvam",
+                "stream": true,
+                "caching": true,
+                "buffer_size": 40,
+                "audio_format": "wav",
+                "provider_config": {
+                  "voice": "Suhani",
+                  "voice_id": "suhani",
+                  "model": "bulbul:v3",
+                  "language": "en-IN",
+                  "speed": 1
+                }
+              },
+              "hi": {
+                "provider": "sarvam",
+                "stream": true,
+                "caching": true,
+                "buffer_size": 40,
+                "audio_format": "wav",
+                "provider_config": {
+                  "voice": "Suhani",
+                  "voice_id": "suhani",
+                  "model": "bulbul:v3",
+                  "language": "hi-IN",
+                  "speed": 1
+                }
+              },
+              "ta": {
+                "provider": "sarvam",
+                "stream": true,
+                "caching": true,
+                "buffer_size": 40,
+                "audio_format": "wav",
+                "provider_config": {
+                  "voice": "Suhani",
+                  "voice_id": "suhani",
+                  "model": "bulbul:v3",
+                  "language": "ta-IN",
+                  "speed": 1
+                }
+              }
+            },
+            "active": "en"
+          },
+          "switch_handoff_messages": {
+            "en": "Sure, we can carry on in English.",
+            "hi": "ठीक है, हिंदी में बात करते हैं।",
+            "ta": "சரி, தமிழ்ல பேசலாம்."
+          }
+        }
+      }
+    ]
+  },
+  "agent_prompts": {
+    "task_1": {
+      "system_prompt": ""
+    }
+  }
+}

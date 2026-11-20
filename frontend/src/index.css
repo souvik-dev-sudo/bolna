@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Colors, fonts, radii and shadows live in src/theme/theme.ts (wired in via tailwind.config.ts). */
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  /* Always reserve the scrollbar's space, so switching between short and tall pages
+     (e.g. agent editor tabs) doesn't shift the layout sideways. */
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  body {
+    font-feature-settings: "ss01";
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-heading tracking-tightish;
+  }
+
+  ::selection {
+    @apply bg-primary-soft text-primary-hover;
+  }
+
+  :focus-visible {
+    @apply outline-none;
+  }
+}
+
+@layer components {
+  /* Fine scrollbars for panels and tables */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: theme("colors.border.strong") transparent;
+  }
+
+  .text-indic {
+    font-family: theme("fontFamily.sans"), theme("fontFamily.indic");
+  }
+}
+
+/* React Flow: match the theme */
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__controls {
+  @apply overflow-hidden rounded-md border bg-card shadow-soft;
+}
+.react-flow__controls-button {
+  @apply border-border bg-card text-muted-foreground;
+}
+.react-flow__controls-button:hover {
+  @apply bg-muted;
+}
+.react-flow__minimap {
+  @apply overflow-hidden rounded-lg border shadow-soft;
+}

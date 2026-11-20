@@ -350,6 +350,8 @@ class Llm(BaseModel):
 class SimpleLlmAgent(Llm):
     agent_flow_type: Optional[str] = "streaming"  # It is used for backwards compatibility
     extraction_details: Optional[str] = None
+    # {field_name: instruction}: the schema the extraction task fills (read by TaskManager.load_prompt).
+    extraction_json: Optional[Union[str, Dict[str, str]]] = None
     summarization_details: Optional[str] = None
 
 
@@ -458,6 +460,8 @@ class GraphNode(BaseModel):
     function_call: Optional[str] = None
     completion_check: Optional[Callable[[List[dict]], bool]] = None
     rag_config: Optional[RagConfig] = None
+    # Canvas position in the dashboard's graph editor ({"x": .., "y": ..}); the engine ignores it.
+    position: Optional[Dict[str, float]] = None
 
     @model_validator(mode="after")
     def validate_routing_effort_for_model(self):
@@ -747,6 +751,10 @@ class ConversationConfig(BaseModel):
     use_fillers: Optional[bool] = False
     trigger_user_online_message_after: Optional[int] = 10
     check_user_online_message: Optional[Union[str, Dict[str, str]]] = "Hey, are you still there"
+    # Read by TaskManager; declared here so saving an agent does not drop them.
+    welcome_message_delay: Optional[int] = 0  # ms to wait after the call connects before the welcome message
+    call_hangup_message: Optional[Union[str, Dict[str, str]]] = None  # said before hanging up; {lang: text} per language
+    discard_pre_welcome_utterance: Optional[bool] = False  # drop caller speech that started before the welcome finished
     check_if_user_online: Optional[bool] = True
     dtmf_enabled: Optional[bool] = False
     # Voicemail detection configuration
@@ -771,4 +779,8 @@ class AgentModel(BaseModel):
     agent_name: str
     agent_type: str = "other"
     tasks: List[Task]
-    agent_welcome_message: Optional[str] = AGENT_WELCOME_MESSAGE
+    # A string, or {lang: text} for multilingual agents; the call's starting language picks one.
+    agent_welcome_message: Optional[Union[str, Dict[str, str]]] = AGENT_WELCOME_MESSAGE
+    # Post-call webhook, sent by bolna-app (local_setup/call_results.py) after the follow-up tasks.
+    webhook_url: Optional[str] = None
+    webhook_headers: Optional[Dict[str, str]] = None

@@ -1,6 +1,6 @@
 {
   "agent_config": {
-    "agent_name": "No-Show v4 (multilingual)",
+    "agent_name": "No-Show v5 (multilingual)",
     "agent_type": "graph_agent",
     "agent_welcome_message": "Good morning. I am Kavya from Dr. Agarwal's Eye Hospital. Preferred language - English, Hindi or Tamil?",
     "tasks": [
@@ -361,20 +361,18 @@
             }
           },
           "transcriber": {
-            "provider": "gemini",
-            "model": "gemini-3.5-transcribe-live-preview",
-            "language": "en",
+            "provider": "sarvam",
+            "model": "saaras:v3",
+            "language": "en-IN",
             "stream": true,
             "encoding": "linear16",
-            "endpointing": 300,
             "multilingual": {
               "en": {
-                "provider": "gemini",
-                "model": "gemini-3.5-transcribe-live-preview",
-                "language": "en",
+                "provider": "sarvam",
+                "model": "saaras:v3",
+                "language": "en-IN",
                 "stream": true,
-                "encoding": "linear16",
-                "endpointing": 300
+                "encoding": "linear16"
               },
               "hi": {
                 "provider": "sarvam",
